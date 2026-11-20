@@ -47,6 +47,7 @@ def cmd_capture(args):
 def cmd_start(args):
     d = get_driver(args.driver, zoom=args.zoom, profile_dir=args.profile)
     st = _open_state(args.state)
+    _watchdog(args.max_seconds)
     started, failed = flow.start_pending(d, st, args.concurrency)
     stmod.save(args.state, st)
     print(f"本次确认在播 {len(started)} 门（含已在播，总上限 {args.concurrency}）")
@@ -163,7 +164,8 @@ def cmd_status(args):
         print(f"范围: {scope.get('name', '-')}")
         cur = prog.get("current")
         print(f"当前班: {titles.get(cur, cur or '-')}")
-        print(f"已完成班: {len(prog.get('done', []))}   暂停: {prog.get('paused_reason', '无')}")
+        manual = prog.get("manual", {})
+        print(f"已完成班: {len(prog.get('done', []))}   需人工补完: {len(manual)}   暂停: {prog.get('paused_reason', '无')}")
         print("各班级进度:")
         for fn in sorted(os.listdir(args.state_dir)):
             if not fn.endswith(".json") or fn.startswith("_"):
@@ -178,7 +180,10 @@ def cmd_status(args):
             total = len(valid)
             act = len(st.get("active", []))
             pr = st.get("paused_reason", "")
-            print(f"  {titles.get(wid, wid)[:30]:<32} {done}/{total}  在播{act}" + (f"  ⏸{pr}" if pr else ""))
+            tail = f"  ⏸{pr}" if pr else ""
+            if wid in manual:
+                tail += f"  （剩{manual[wid]}门需人工）"
+            print(f"  {titles.get(wid, wid)[:30]:<32} {done}/{total}  在播{act}" + tail)
         return
     st = _open_state(args.state)
     done = len(st.get("done", []))
@@ -225,6 +230,7 @@ def build_parser():
     s = sub.add_parser("start", help="起播指定数量课程")
     s.add_argument("--state", default="bangxue_state.json")
     s.add_argument("--concurrency", type=int, default=5)
+    s.add_argument("--max-seconds", type=int, default=600, help="单轮硬超时秒数（0=不限）")
     s.set_defaults(fn=cmd_start)
 
     t = sub.add_parser("status", help="查看进度（单班或按范围汇总）")

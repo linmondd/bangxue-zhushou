@@ -219,6 +219,21 @@ LIBRARY_SCOPE_JS = r"""
 })()
 """
 
+WORKSHOP_COURSES_JS = r"""
+(function(){
+  var el=document.querySelector('.workshop-content'), v=el&&el.__vue__;
+  if(!v||!v.$data||!v.$data.myWorkshopDetail) return '[]';
+  var d=v.$data.myWorkshopDetail;
+  var list=d.contentList||d.courseList||[];
+  return JSON.stringify(list.map(function(x){
+    var t=x.filetype||x.showType||'';
+    return {cid:x.knowledgeId||'', title:x.knowledgeName||x.title||'',
+            prog:(x.progress===null||x.progress===undefined)?'':String(x.progress)+'%',
+            type:t, kngType:x.kngType||'', url:x.kngDetailUrl||''};
+  }));
+})()
+"""
+
 def read_library_classes(driver, tab_name=None):
     """从资源库页面读取某个 tab 下的班级列表（wid+title）。"""
     tab = driver.open("https://learning-platform.local/portal/#/centralizedResource", new_tab=True)
@@ -247,6 +262,33 @@ def capture(driver, wid, log=print):
     if not (isinstance(href, str) and "myworkshop/detail" in href and wid in href):
         log("ERROR: 未进入专题班课程表页，放弃建表")
         return None
+    # 首选：直接读页面 Vue 数据里的 contentList（只读，不点按钮，不调接口）
+    try:
+        raw = driver.eval(WORKSHOP_COURSES_JS)
+        items = json.loads(raw) if raw else []
+    except Exception:
+        items = []
+    if items and any(x.get("cid") for x in items):
+        courses = []
+        for i, x in enumerate(items):
+            t = (x.get("type") or "").strip()
+            if "Video" in t:
+                typ = "视频"
+            elif "CoursePackage" in t:
+                typ = "课程包"
+            elif "Scorm" in t:
+                typ = "scorm"
+            elif "Exam" in t:
+                typ = "考试"
+            else:
+                typ = t
+            prog = x.get("prog", "")
+            courses.append({"i": i, "cid": x.get("cid", ""), "title": x.get("title", ""),
+                            "prog": prog, "act": ("立即回看" if prog == "100%" else "立即学习"),
+                            "type": typ, "manual": not typ.startswith("视频")})
+        ok = sum(1 for c in courses if c["cid"])
+        log(f"从页面数据读取 {ok}/{len(courses)} 门课程（无需逐行点击）")
+        return {"workshop": wid, "courses": courses}
     n = driver.eval("[...document.querySelectorAll('table tbody tr')].length") or 0
     try:
         n = int(n)

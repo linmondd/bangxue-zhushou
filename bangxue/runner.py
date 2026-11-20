@@ -53,6 +53,7 @@ def _run_cycle(driver, scope_path, state_dir, concurrency=5, log=print):
         return
     done = set(prog.get("done", []))
     skipped = prog.get("skipped", {})
+    manual_classes = prog.setdefault("manual", {})
     cur = prog.get("current")
     title_of = {c["wid"]: c.get("title", "") for c in classes_list}
 
@@ -78,17 +79,34 @@ def _run_cycle(driver, scope_path, state_dir, concurrency=5, log=print):
             _save(prog_path, prog)
             log(f"✅ 班级完成：{title_of.get(cur, '')[:26]}")
         else:
-            d, t = classes.progress(rows) if rows else (0, 0)
-            log(f"当前班级：{title_of.get(cur, '')[:26]} 完成 {d}/{t}，下轮继续")
-            prog["done"] = sorted(done)
-            _save(prog_path, prog)
-            return
+            # 视频全学完、只剩 scorm/课程包/考试：记「需人工」，继续下一个班，避免整夜卡死
+            try:
+                cst = stmod.load(sp)
+                valid = [c for c in cst.get("courses", []) if c.get("cid")]
+                done_set = set(cst.get("done", []))
+                video_left = [c for c in valid if not c.get("manual") and c["cid"] not in done_set]
+                manual_left = [c for c in valid if c.get("manual") and c["cid"] not in done_set]
+                unmapped = [c for c in cst.get("courses", []) if not c.get("cid")]
+            except Exception:
+                video_left, manual_left, unmapped = [1], [], []
+            if not video_left and manual_left and not unmapped:
+                manual_classes[cur] = len(manual_left)
+                prog["current"] = None
+                prog["manual"] = manual_classes
+                _save(prog_path, prog)
+                log(f"⏭ 视频已学完，剩 {len(manual_left)} 门需人工（scorm/课程包/考试）：{title_of.get(cur, '')[:26]}")
+            else:
+                d, t = classes.progress(rows) if rows else (0, 0)
+                log(f"当前班级：{title_of.get(cur, '')[:26]} 完成 {d}/{t}，下轮继续")
+                prog["done"] = sorted(done)
+                _save(prog_path, prog)
+                return
 
     # 2) 找下一个班：已完成的跳过；未报名的先报名；然后建课表并起播
     for c in classes_list:
         wid = c["wid"]
         title = c.get("title", "")
-        if wid in done or wid in skipped:
+        if wid in done or wid in skipped or wid in manual_classes:
             continue
         rows = classes.read_class_table(driver, wid)
         if classes.is_complete(rows):

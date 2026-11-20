@@ -144,6 +144,7 @@ bangxue resume  --scope bangxue_scope.json --state-dir bangxue_classes   # 解�
 | 点「立即学习」不一定弹出可捕获的 URL | 用「点击后观察新开的课程标签、从 URL 取 courseId」，不要依赖 `window.open` 钩子（属注入） |
 | 标题被截断 / 上中下撞车 | 存**完整标题**；完成回验用全名 + 「上/中/下」后缀校验，禁止只靠前缀 |
 | 某行没抓到 courseId | **fail-closed**：明确告警并计入「未映射」，不许静默跳过（否则会少报"剩余0"） |
+| 老专题班的「立即学习/立即回看」点了不打开新标签，逐行点击抓 courseId **全部 MISS** | 不要只靠"点一行、等新标签"；优先读页面自带的课程数据 `contentList`（`knowledgeId`/`knowledgeName`/`progress`/`filetype`），读不到再回退逐行点击（0.1.5 修复） |
 
 ### 阶段 3：进入学习（最关键的坑）
 | 坑 | 处理 |
