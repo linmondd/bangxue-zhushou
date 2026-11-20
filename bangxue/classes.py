@@ -48,16 +48,36 @@ def is_complete(rows):
     return total > 0 and done == total
 
 
-def ensure_enrolled(driver, wid):
-    """打开班级公开详情页；若有「立即报名」则可信点击报名。返回是否已报名。"""
-    tab = driver.open(f"https://learning-platform.local/workshop/#/detail?id={wid}", new_tab=True)
-    if not driver.use(tab):
-        return False
+def ensure_enrolled(driver, wid, reuse=False):
+    """打开班级详情页；未报名则可信点击「立即报名」。reuse=True 复用当前标签，不新开不关闭。"""
+    if reuse:
+        tab = None
+        driver.open(f"https://learning-platform.local/workshop/#/detail?id={wid}", new_tab=False)
+    else:
+        tab = driver.open(f"https://learning-platform.local/workshop/#/detail?id={wid}", new_tab=True)
+        if not driver.use(tab):
+            return False
+    href = None
     for _ in range(20):
         time.sleep(0.7)
         href = driver.current_url()
         if isinstance(href, str) and "workshop" in href and wid in href:
             break
+    if not (isinstance(href, str) and "workshop" in href and wid in href):
+        if tab is not None:
+            try:
+                driver.close(tab)
+            except Exception:
+                pass
+        return False
+    if "myworkshop/detail" in href:
+        # 已经报名，直接返回
+        if tab is not None:
+            try:
+                driver.close(tab)
+            except Exception:
+                pass
+        return True
     time.sleep(1)
     enrolled = True
     r = driver.eval('(function(){var a=[...document.querySelectorAll("button")].filter(function(e){return e.textContent.trim().indexOf("立即报名")>=0&&e.getBoundingClientRect().width>0;});if(!a.length)return "none";var el=a[0];el.scrollIntoView({block:"center"});var b=el.getBoundingClientRect();return JSON.stringify({x:Math.round(b.x+b.width/2),y:Math.round(b.y+b.height/2)});})()')
@@ -77,9 +97,10 @@ def ensure_enrolled(driver, wid):
                 enrolled = "立即报名" not in vals
         except Exception:
             enrolled = False
-    # 临时报名页用完就关，避免标签堆积
-    try:
-        driver.close(tab)
-    except Exception:
-        pass
+    # 临时报名页用完就关（复用扫描标签时不关）
+    if tab is not None:
+        try:
+            driver.close(tab)
+        except Exception:
+            pass
     return enrolled

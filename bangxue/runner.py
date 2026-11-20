@@ -127,8 +127,9 @@ def _run_cycle(driver, scope_path, state_dir, concurrency=5, log=print):
 
     # 2) 找下一个班：已完成的跳过；未报名的先报名；然后建课表并起播
     try:
-        driver.open("https://learning-platform.local/portal/", new_tab=True)
-        driver.bring_to_front()
+        scan = driver.open("https://learning-platform.local/portal/", new_tab=True)
+        if not driver.use(scan):
+            log("⚠ 扫描标签定位失败，仍尝试继续")
     except Exception:
         pass
     for c in classes_list:
@@ -143,7 +144,7 @@ def _run_cycle(driver, scope_path, state_dir, concurrency=5, log=print):
             log(f"✅ 已完成，跳过：{title[:26]}")
             continue
         if not rows:
-            if not classes.ensure_enrolled(driver, wid):
+            if not classes.ensure_enrolled(driver, wid, reuse=True):
                 skipped[wid] = "enroll_failed"
                 log(f"⚠ 报名失败，跳过：{title[:26]}")
                 continue
@@ -173,10 +174,17 @@ def _run_cycle(driver, scope_path, state_dir, concurrency=5, log=print):
             log(f"⏸ 班级暂停（{st['paused_reason']}），已停止本轮")
         return
 
-    log("🎉 范围内所有班级已全部完成")
     prog["done"] = sorted(done)
+    prog["manual"] = manual_classes
+    prog["skipped"] = skipped
     prog["current"] = None
     _save(prog_path, prog)
+    if skipped:
+        log(f"⚠ 本轮结束：{len(skipped)} 个班报名/建表失败被跳过，尚未完成；详见状态文件")
+    elif manual_classes:
+        log(f"✅ 可自动学习的班已全部完成；另有 {len(manual_classes)} 个班需人工补完")
+    else:
+        log("🎉 范围内所有班级已全部完成")
 
 
 def run_loop(driver, scope_path, state_dir, concurrency=5, interval_min=15, log=print):
