@@ -104,6 +104,18 @@ def _run(driver, state_path, log=print):
         ct, dur = s.get("ct", -1), s.get("dur", -1)
         if isinstance(ct, (int, float)):
             last_ct[cid] = ct
+        # 连续多轮无进展：止损转人工，避免一门坏课拖死整班
+        stuck = st.setdefault("stuck", {})
+        if prev is not None and isinstance(ct, (int, float)) and ct >= 0 and abs(ct - prev) < 1:
+            stuck[cid] = stuck.get(cid, 0) + 1
+        else:
+            stuck[cid] = 0
+        if stuck.get(cid, 0) >= 3:
+            flow.close(driver, cid, wid)
+            info["manual"] = True
+            failed[cid] = "stuck"
+            report.append(f"⚠ 连续3轮无进展，转为需人工：{info.get('title', cid)[:22]}")
+            continue
         hit_end = (prog == "100%") or (dur and dur > 60 and ct >= dur - 5)
         if hit_end:
             v = flow.verify(driver, wid, info.get("title", ""))
