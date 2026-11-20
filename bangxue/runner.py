@@ -97,6 +97,13 @@ def _run_cycle(driver, scope_path, state_dir, concurrency=5, log=print):
         rows = classes.read_class_table(driver, cur)
         if classes.is_complete(rows):
             done.add(cur)
+            try:
+                cst = stmod.load(sp)
+                cst["done"] = [c["cid"] for c in cst.get("courses", []) if c.get("cid")]
+                cst["active"] = []
+                stmod.save(sp, cst)
+            except Exception:
+                pass
             prog["current"] = None
             prog["done"] = sorted(done)
             _save(prog_path, prog)
