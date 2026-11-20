@@ -1,50 +1,35 @@
 #!/usr/bin/env bash
-# 帮学助手 一键安装（macOS / Linux）
-set -uo pipefail
-DIR="$(cd "$(dirname "$0")" && pwd)"
-PY="${PYTHON:-python3}"
-
-if ! command -v "$PY" >/dev/null 2>&1; then
-  echo "❌ 未找到 python3。请先安装 Python 3.9+（https://www.python.org/downloads/），再重新运行本脚本。"
+set -euo pipefail
+dir="$(cd "$(dirname "$0")" && pwd)"
+base="${BANGXUE_HOME:-$HOME/.bangxue}"
+bin="${BANGXUE_BIN_DIR:-$HOME/.local/bin}"
+python="${PYTHON:-python3}"
+extra=playwright
+case "${1:-}" in
+  --mcp) extra=playwright,mcp ;;
+  "") ;;
+  *) echo "用法：bash install.sh [--mcp]" >&2; exit 2 ;;
+esac
+if ! command -v "$python" >/dev/null; then
+  echo "源码安装需要 Python 3.9+，也可以使用已打包的控制面板。" >&2
   exit 1
 fi
-
-echo "== 帮学助手 一键安装 =="
-BASE="$HOME/.bangxue"
-VENV="$BASE/venv"
-mkdir -p "$BASE" "$HOME/.local/bin"
-
-if [ ! -x "$VENV/bin/python" ]; then
-  echo "1/4 创建运行环境…"
-  "$PY" -m venv "$VENV" || { echo "❌ 创建虚拟环境失败"; exit 1; }
+mkdir -p "$base" "$bin"
+venv="$base/venv"
+if [ ! -x "$venv/bin/python" ]; then "$python" -m venv "$venv"; fi
+"$venv/bin/python" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else "请使用 Python 3.9 或更高版本")'
+if [[ "$extra" == *,mcp ]]; then
+  "$venv/bin/python" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else "MCP 需要 Python 3.10+，请使用新版 Python 与新的 BANGXUE_HOME")'
 fi
-
-echo "2/4 安装帮学助手…"
-"$VENV/bin/pip" install -q --upgrade pip
-WHEEL=$(ls "$DIR"/dist/bangxue-*.whl 2>/dev/null | head -1 || true)
-if [ -n "$WHEEL" ]; then
-  "$VENV/bin/pip" install -q "$WHEEL" || { echo "❌ 安装失败"; exit 1; }
-else
-  "$VENV/bin/pip" install -q "$DIR" || { echo "❌ 安装失败"; exit 1; }
+echo "正在安装本版本及浏览器组件…"
+# Build from this checkout, so a historical dist wheel cannot override edits.
+"$venv/bin/python" -m pip install "$dir[$extra]"
+"$venv/bin/python" -m playwright install chromium
+"$venv/bin/python" -c 'from bangxue import panel; from bangxue.drivers.playwright_driver import PlaywrightDriver; assert PlaywrightDriver(profile_dir="check").available(), "浏览器组件尚未就绪"'
+ln -sf "$venv/bin/bangxue" "$bin/bangxue"
+if [[ "$extra" == *,mcp ]]; then
+  "$venv/bin/python" -c 'from mcp.server.fastmcp import FastMCP'
+  ln -sf "$venv/bin/bangxue-mcp" "$bin/bangxue-mcp"
+  echo "MCP 命令入口：$bin/bangxue-mcp"
 fi
-
-echo "3/4 安装 Playwright 与浏览器组件（用于登录和驱动）…"
-"$VENV/bin/pip" install -q playwright || echo "（Playwright 安装失败，可稍后手动安装）"
-"$VENV/bin/python" -m playwright install chromium >/dev/null 2>&1 || echo "（浏览器组件下载失败，可稍后重试）"
-
-echo "4/4 创建命令入口…"
-cat > "$HOME/.local/bin/bangxue" <<EOF
-#!/bin/bash
-exec "$VENV/bin/bangxue" "\$@"
-EOF
-chmod +x "$HOME/.local/bin/bangxue"
-
-echo ""
-echo "✅ 安装完成！"
-echo ""
-echo "下一步："
-echo "  1) 登录一次：  $HOME/.local/bin/bangxue login"
-echo "  2) 环境自检：  $HOME/.local/bin/bangxue doctor"
-echo "  3) 开始学习：  $HOME/.local/bin/bangxue run --scope 范围文件.json --state-dir 班级状态 --concurrency 5"
-echo ""
-echo "提示：如果提示 command not found，请把 $HOME/.local/bin 加入 PATH，或直接使用上面的完整路径。"
+echo "安装完成。打开控制面板：\"$bin/bangxue\" panel"

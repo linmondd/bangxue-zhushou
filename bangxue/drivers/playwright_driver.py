@@ -3,6 +3,7 @@
 2) persistent：使用专用用户目录启动 Chromium（适合非技术用户，只需登录一次）
 """
 import os, time
+from weakref import WeakKeyDictionary
 from .base import Driver, Tab
 
 
@@ -18,6 +19,7 @@ class PlaywrightDriver(Driver):
         self._browser = None
         self._context = None
         self._current_page = None
+        self._target_ids = WeakKeyDictionary()
 
     def _ensure(self):
         if self._context is not None:
@@ -27,11 +29,15 @@ class PlaywrightDriver(Driver):
         except Exception as e:
             raise RuntimeError("未安装 playwright：pip install playwright && python -m playwright install chromium") from e
         self._pw = sync_playwright().start()
-        if self.profile_dir:
-            self._context = self._pw.chromium.launch_persistent_context(self.profile_dir, headless=self.headless)
-        else:
-            self._browser = self._pw.chromium.connect_over_cdp(self.cdp_url)
-            self._context = self._browser.contexts[0]
+        try:
+            if self.profile_dir:
+                self._context = self._pw.chromium.launch_persistent_context(self.profile_dir, headless=self.headless)
+            else:
+                self._browser = self._pw.chromium.connect_over_cdp(self.cdp_url)
+                self._context = self._browser.contexts[0]
+        except Exception:
+            self.shutdown()
+            raise
 
     def _chromium_installed(self):
         try:
@@ -44,6 +50,8 @@ class PlaywrightDriver(Driver):
             return False
 
     def available(self):
+        if self._context is not None:
+            return True
         if self.profile_dir:
             # 持久模式：只检查 playwright 与 chromium 是否安装，不启动浏览器
             return self._chromium_installed()
@@ -55,41 +63,59 @@ class PlaywrightDriver(Driver):
 
     def _pages(self):
         self._ensure()
-        pages = list(self._context.pages)
-        if not pages:
-            pages = [self._context.new_page()]
-        return pages
+        return list(self._context.pages)
+
+    def _tab(self, page):
+        if page not in self._target_ids:
+            session = self._context.new_cdp_session(page)
+            try:
+                self._target_ids[page] = session.send("Target.getTargetInfo")["targetInfo"]["targetId"]
+            finally:
+                session.detach()
+        return Tab(self._target_ids[page], page.url)
+
+    def _page(self, tab):
+        return next((p for p in self._pages() if self._tab(p).id == tab.id), None)
 
     def list_tabs(self):
         try:
-            return [Tab(p.url, p.url) for p in self._pages()]
+            pages = self._pages()
+            if pages:
+                # Pump Chromium events before reading the locally cached page collection.
+                pages[0].wait_for_timeout(1)
+            return [self._tab(p) for p in self._pages()]
         except Exception:
             return None
 
     def open(self, url, new_tab=True):
         self._ensure()
-        page = self._context.new_page()
-        page.goto(url, wait_until="domcontentloaded")
+        page = self._current_page
+        created = new_tab or page is None or page.is_closed()
+        if created:
+            page = self._context.new_page()
+        try:
+            page.goto(url, wait_until="domcontentloaded")
+        except Exception:
+            if created:
+                page.close()
+            raise
         self._current_page = page
-        return Tab(page.url, page.url)
+        return self._tab(page)
 
-    def use(self, tab, retries=10):
-        for _ in range(retries):
-            for p in self._pages():
-                if p.url == tab.url:
-                    self._current_page = p
-                    try:
-                        p.bring_to_front()
-                    except Exception:
-                        pass
-                    try:
-                        z = "" if (not self.zoom or self.zoom == 100) else f"{self.zoom/100.0:.2f}"
-                        p.evaluate(f'document.documentElement.style.zoom="{z}"')
-                    except Exception:
-                        pass
-                    return True
-            time.sleep(0.5)
-        return False
+    def use(self, tab, retries=None):
+        page = self._page(tab)
+        if page is None:
+            return False
+        self._current_page = page
+        page.bring_to_front()
+        zoom = "" if not self.zoom or self.zoom == 100 else str(self.zoom / 100)
+        page.evaluate("(zoom) => document.documentElement.style.zoom = zoom", zoom)
+        return True
+
+    def opened_by(self, tab, parent):
+        page = self._page(tab)
+        opener = page.opener() if page else None
+        return opener is not None and self._tab(opener).id == parent.id
 
     def current_url(self):
         try:
@@ -116,10 +142,13 @@ class PlaywrightDriver(Driver):
             pass
 
     def close(self, tab):
-        if not self.use(tab):
-            return False
         try:
-            self._current_page.close()
+            page = self._page(tab)
+            if page is None or page.url != tab.url:
+                return False
+            page.close()
+            if self._current_page is page:
+                self._current_page = None
             return True
         except Exception:
             return False
@@ -140,3 +169,14 @@ class PlaywrightDriver(Driver):
             return True
         except Exception:
             return False
+
+    def shutdown(self):
+        """释放连接，专用配置使用的浏览器随最后一个上下文关闭。"""
+        try:
+            if self.profile_dir and self._context is not None:
+                self._context.close()
+        finally:
+            if self._pw is not None:
+                self._pw.stop()
+            self._pw = self._context = self._browser = self._current_page = None
+            self._target_ids.clear()

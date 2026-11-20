@@ -1,6 +1,6 @@
 # 刷课 · Workbuddy 适配说明（移植清单）
 
-> 状态：**设计兼容，未实测**。本文档是把 `bangxue` 迁到 Workbuddy 时要做的映射与核对。
+> 状态：**CLI 与 MCP 协议已通过隔离测试，Workbuddy 客户端真实登录学习待实测**。本文档是把 `bangxue` 迁到 Workbuddy 时要做的映射与核对。
 > 通用流程、验收标准见 `SKILL.md`，那里不变；本文件只填「契约 → Workbuddy API」。
 
 ## 落地顺序（优先用现成能力，不要重写）
@@ -10,7 +10,7 @@
    bangxue status --state bangxue_state.json
    ```
    `run` = 范围内自动续班：刷完一个班自动找下一个（未报名先报名），直到范围内全部完成。Agent 只负责“开任务/看报告/处理异常”。
-2. **次选 MCP**：Workbuddy 支持 MCP 时，配置 `python -m bangxue.mcp_server`，调用 `bangxue_run(scope, state_dir, concurrency)` / `bangxue_status` / `bangxue_monitor` 工具。
+2. **次选 MCP**：Workbuddy 支持 MCP 时，配置新手说明所用安装环境中的 `bangxue-mcp` 绝对路径，调用 `bangxue_run(scope, state_dir, concurrency)` / `bangxue_status` / `bangxue_monitor` 工具。
 3. **兜底**：Workbuddy 既不能跑命令也不能接 MCP，才按下面的契约实现驱动（工作量最大，最不稳）。
 
 ## 0. 先确认 Workbuddy 有没有浏览器能力

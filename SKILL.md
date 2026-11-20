@@ -14,7 +14,9 @@ description: 帮学助手——当用户说「刷课」「帮学」「挂机学�
 判断某做法是否越界的问题：**换工具后这条规则还成立吗？** 成立→写进本文件；只与本工具相关→放进对应实现说明。
 
 ## 快速使用（推荐：CLI / MCP，而不是照着文档手点）
-**新手一键**：`bash install.sh` → `~/.local/bin/bangxue login` → `bangxue doctor` → `bangxue run`（详见 `README.md` / `新手使用说明.md`）。
+**新手首选**：打开桌面控制面板，手动登录、勾选班级并确认并发门数，默认一次 1 门。源码入口为 `bangxue panel`。
+
+**命令行**：`bash install.sh` → `~/.local/bin/bangxue login` → `bangxue doctor` → `bangxue run`（详见 `README.md` / `新手使用说明.md`）。
 本 skill 已打包为可执行 CLI，Agent 只负责调用和看报告：
 ```bash
 bangxue capture --workshop "<专题班链接>" --concurrency 5   # 建课表+状态（单班）
@@ -47,13 +49,13 @@ bangxue resume  --scope bangxue_scope.json --state-dir bangxue_classes   # 解�
   ```bash
   bangxue run --scope bangxue_scope.json --state-dir bangxue_classes --concurrency 5
   ```
-  MCP：`bangxue_run(scope, state_dir, concurrency)`。定时器每 15 分钟调一次即可。
+  MCP：`bangxue_run(scope, state_dir, concurrency)`。外部定时器每 15 分钟调用一次 `run --once` 或单轮 MCP 工具。
 
 ## 交互协议（用户说「刷课」时）
 1. **先主动问「范围」**（最重要的第一步）：这次要在哪个范围里学？（例如：某个资源库 tab / 指定的一组班 / 单个班）。
    - 用户给出范围后，**把范围内的班级逐个列出（编号 + 班名 + 学时，标记「已完成/在学/未开始」），请用户确认哪些纳入学习范围**（可排除个别班）。
    - 只有用户确认后，才写入 `bangxue_scope.json` 并开始；**不要再逐个问班名**。
-2. 问并发：**3/5/10**（默认 5）。画质默认**流畅**、倍速默认 **2.0x**。
+2. 问并发：**1/3/5/10**（面板默认 1，CLI 默认 5）。程序尝试使用倍速菜单，实际效果以页面为准。
 3. 把范围写成 `bangxue_scope.json`（`{"name":..., "classes":[{"wid","title"}]}`），跑 `bangxue run`；每 15 分钟巡检汇报，整班完成自动切下一个。
 4. 登录失效/验证码/平台明确限制 → 暂停并如实报告，不伪造进度。
 
@@ -94,7 +96,7 @@ bangxue resume  --scope bangxue_scope.json --state-dir bangxue_classes   # 解�
 
 ## 已知遗留（未修，需后续）
 - `window.__player` / `setSpeed` 仍属注入（建议迁纯可见控件，配方见 impl-webbridge.md）。
-- 4008/登录失效/验证码无自动熔断，靠人工介入。
+- 登录失效、验证码或平台限制会暂停任务。4008 等错误会在待处理结果中记录。
 - 桥不暴露稳定 tabId，回验是补偿；换工具时优先用 tabId。
 - 画质未单独设置（平台默认流畅；非流畅时按配方处理）。
 
@@ -200,7 +202,7 @@ bangxue resume  --scope bangxue_scope.json --state-dir bangxue_classes   # 解�
 - **写流程必须照「实际失败日志」逐条录，不能照「成功路径」回忆着写。** 本 skill 曾漏掉最关键的一坑（只开页面不进入学习 / 我要学习只认可信点击），原因就是作者用脚本捷径（直开 /play）绕过了它，写文档时按成功路径回忆，把真正的业务规则忘了。
 - **选课不要求 0%：任何「未完成」的课都能刷（含学到一半的）**，只有课程表已 100%/立即回看的不重复刷。别把"没播过"当成前提。
 - 每次实战遇到新坑（报错、卡住、点了没反应、进度不动），**先记进本文件的全旅程踩坑表，再改代码**；坑表是主产物，脚本只是当前实现。
-- 改脚本后必须回填：踩坑表、`impl-*.md` 的实现事实、以及 `quick_validate`。
+- 改脚本后必须回填：踩坑表、`impl-*.md` 的实现事实、以及 `python -m unittest discover -s tests -v`。
 - 文档里的每个"必须"都要能在当前脚本里找到对应实现；找不到就是文档说谎，要么补实现，要么标「遗留」。
 
 ## 实现

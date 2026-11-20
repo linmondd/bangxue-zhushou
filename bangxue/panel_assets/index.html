@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>学习工作台 · 帮学助手</title><link rel="stylesheet" href="/panel.css">
+  <script defer src="/panel.js"></script>
+</head>
+<body>
+<header><div class="wrap mast"><div class="brand"><i class="book" aria-hidden="true"></i>帮学助手</div><nav aria-label="主导航"><a href="#workspace">工作台</a><a href="#records">任务记录</a></nav></div></header>
+<main class="wrap" id="workspace">
+  <section class="hero"><div><p class="kicker"><span class="light"></span> 本机学习面板</p><h1>学习工作台</h1><p id="guide">正在读取本机环境…</p></div><div class="count"><span>已完成班级</span><strong id="count">—</strong><progress id="meter" max="1" value="0" aria-label="已完成班级"></progress></div></section>
+  <p id="notice" role="status" hidden></p>
+  <div class="grid">
+    <section class="card setup"><h2>学习环境</h2>
+      <div class="checks"><div><span>Python</span><b id="python">检查中</b></div><div><span>Playwright</span><b id="playwright">检查中</b></div><div><span>Chromium 浏览器</span><b id="chromium">检查中</b></div></div>
+      <div class="line"><button id="repair" data-act="repair" hidden>安装 / 修复组件</button><button class="quiet" data-act="setup">重新检查</button></div>
+      <hr><h3>学习账号</h3><p class="sub" id="login-hint">在独立学习窗口中完成登录及验证，登录信息保存在本机。</p>
+      <div class="line"><button id="login" data-act="login">打开登录窗口</button><button class="quiet" data-act="verify">检查登录</button></div>
+    </section>
+    <section class="card"><h2>选择学习范围</h2><p class="sub">读取资源库栏目，再勾选本次希望学习的班级。</p>
+      <label for="tab">资源栏目</label><div class="line"><button id="tabs" data-act="tabs">获取栏目</button><select id="tab"><option value="">选择栏目</option><option value="__custom">手动填写栏目</option></select></div>
+      <input id="custom" type="text" maxlength="200" placeholder="输入网站显示的栏目全名" aria-label="栏目全名" hidden>
+      <div class="line"><button id="load" data-act="classes">读取班级</button></div>
+      <div id="pick" hidden><hr><div class="line between"><h3>勾选班级</h3><label class="inline"><input type="checkbox" id="all">全选</label></div><div id="choices"></div>
+      <label for="concurrency">最多同时播放</label><select id="concurrency"><option value="1">1 门</option><option value="3">3 门</option><option value="5">5 门</option><option value="10">10 门</option></select>
+      <div class="line between"><small id="selected"></small><button id="confirm" class="primary" data-act="confirm">确认学习范围</button></div></div>
+    </section>
+  </div>
+  <section class="card task" id="records"><div class="line between"><h2>任务与结果</h2><select id="history" aria-label="查看保存的任务" hidden></select></div>
+    <p id="empty" class="sub">确认范围后，这里会显示每个班级的进度和需要处理的课程。</p>
+    <div id="task" hidden><div class="task-head"><div><span id="phase" class="tag"></span><h3 id="task-title"></h3></div><div class="line" id="actions"></div></div>
+      <p id="task-note" class="sub" role="status"></p><p id="enroll" class="sub" hidden>开始后，助手将依次处理所选班级，并尝试报名尚未加入的班级。</p>
+      <div id="results"></div><details id="logbox"><summary>运行记录</summary><pre id="logs"></pre></details>
+    </div>
+  </section>
+</main>
+<footer class="wrap line between"><span>帮学助手 · 本地工作台</span><button class="quiet" data-act="quit">退出助手</button></footer>
+</body></html>

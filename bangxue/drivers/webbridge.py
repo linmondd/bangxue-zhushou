@@ -1,5 +1,5 @@
 """Kimi WebBridge 驱动（HTTP 127.0.0.1:10086）。"""
-import json, time, urllib.request
+import json, time, urllib.request, uuid
 from .base import Driver, Tab
 
 class WebBridgeDriver(Driver):
@@ -11,6 +11,7 @@ class WebBridgeDriver(Driver):
         self.timeout = timeout
         self.zoom = zoom
         self._current = None
+        self._opener_tokens = {}
 
     def _cmd(self, action, args):
         body = json.dumps({"action": action, "args": args, "session": self.session}).encode("utf-8")
@@ -39,36 +40,67 @@ class WebBridgeDriver(Driver):
             return None
 
     def open(self, url, new_tab=True):
+        before = self.list_tabs() if new_tab else []
+        if before is None:
+            raise RuntimeError("无法核对打开标签前的浏览器状态")
         r = self._cmd("navigate", {"url": url, "newTab": new_tab, "group_title": "帮学助手"})
         tab_id = None
         try:
             tab_id = r["data"]["tabId"]
         except Exception:
             pass
+        if tab_id is None:
+            raise RuntimeError("浏览器未返回新页面标识")
+        if new_tab and any(t.id == tab_id for t in before):
+            raise RuntimeError("浏览器复用了已有标签，已停止操作")
         t = Tab(tab_id, url)
         self._current = t
         return t
 
     def use(self, tab, retries=None):
         """WebBridge 只能按 URL 选标签，且多标签下常打错——用 current_url 回验重试。"""
-        if retries is None:
-            n = len(self.list_tabs() or [])
-            retries = min(60, max(10, n * 3))
+        retries = retries if retries is not None else 3
         for _ in range(retries):
-            self._cmd("find_tab", {"url": tab.url})
-            time.sleep(0.7)
-            if self.current_url() == tab.url:
-                self._current = tab
-                # 焦点模拟：让后台标签自认为前台，视频流才会加载（关键）
+            tabs = self.list_tabs() or []
+            match = next((t for t in tabs if t.id == tab.id), None)
+            if match is None or sum(t.url == match.url for t in tabs) != 1:
+                return False
+            self._cmd("find_tab", {"url": match.url})
+            if self.current_url() == match.url:
+                self._current = match
                 self.bring_to_front()
-                # 可选页面缩放（等效浏览器比例缩小），不影响用户浏览器设置；100 时清除
-                try:
-                    z = "" if (not self.zoom or self.zoom == 100) else f"{self.zoom/100.0:.2f}"
-                    self.eval(f'document.documentElement.style.zoom="{z}"')
-                except Exception:
-                    pass
+                if self.zoom and self.zoom != 100:
+                    self.eval(f'document.documentElement.style.zoom="{self.zoom/100:.2f}"')
                 return True
+            time.sleep(0.3)
         return False
+
+    def mark_opener(self, parent):
+        token = uuid.uuid4().hex
+        if self.use(parent) and self.eval(f'window.__bangxueOpenerToken = "{token}"') == token:
+            self._opener_tokens[parent.id] = token
+
+    def opened_by(self, tab, parent):
+        response = self._cmd("list_tabs", {})
+        tabs = response.get("data", {}).get("tabs", [])
+        if any(t.get("tabId") == tab.id and t.get("openerTabId") == parent.id for t in tabs):
+            return True
+        token = self._opener_tokens.get(parent.id)
+        return bool(token and self.use(tab) and self.eval(
+            "(() => {try {return window.opener?.__bangxueOpenerToken} catch {return null}})()"
+        ) == token)
+
+    def owned_record(self, tab):
+        record = {"id": tab.id, "url": tab.url}
+        if self.use(tab) and self.current_url() == tab.url:
+            token = uuid.uuid4().hex
+            if self.eval(f'window.__bangxuePageToken = "{token}"') == token:
+                record["token"] = token
+        return record
+
+    def verify_record(self, tab, record):
+        return bool(record.get("token") and self.use(tab)
+                    and self.eval("window.__bangxuePageToken") == record["token"])
 
     def current_url(self):
         r = self._cmd("evaluate", {"code": "location.href"})
@@ -94,9 +126,8 @@ class WebBridgeDriver(Driver):
         time.sleep(0.2)
 
     def close(self, tab):
-        if not self.use(tab):
+        if not self.use(tab) or self.current_url() != tab.url:
             return False
-        time.sleep(0.2)
         r = self._cmd("close_tab", {})
         return bool(isinstance(r, dict) and r.get("ok"))
 

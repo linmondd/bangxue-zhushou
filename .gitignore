@@ -22,3 +22,7 @@ profile/
 # 系统
 .DS_Store
 Thumbs.db
+
+# Native distributables and test profiles
+delivery/
+*.pause

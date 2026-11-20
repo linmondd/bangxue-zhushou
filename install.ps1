@@ -1,48 +1,29 @@
-# 帮学助手 一键安装（Windows PowerShell）
+﻿param([switch]$Mcp)
 $ErrorActionPreference = "Stop"
-$Dir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$Base = Join-Path $env:USERPROFILE ".bangxue"
+$Base = if ($env:BANGXUE_HOME) { $env:BANGXUE_HOME } else { Join-Path $env:USERPROFILE ".bangxue" }
 $Venv = Join-Path $Base "venv"
 $Bin = Join-Path $Base "bin"
 New-Item -ItemType Directory -Force -Path $Base, $Bin | Out-Null
-
-$py = Get-Command python -ErrorAction SilentlyContinue
-if (-not $py) {
-  Write-Host "❌ 未找到 python，请先安装 Python 3.9+（https://www.python.org/downloads/），勾选 Add to PATH，然后重试。"
-  exit 1
+function Invoke-Checked($Program, [string[]]$Arguments) {
+    & $Program @Arguments
+    if ($LASTEXITCODE -ne 0) { throw "安装步骤失败（$LASTEXITCODE），请检查上方提示后重试。" }
 }
-
-$vp = Join-Path $Venv "Scripts\python.exe"
-$pip = Join-Path $Venv "Scripts\pip.exe"
-
-if (-not (Test-Path $vp)) {
-  Write-Host "1/4 创建运行环境…"
-  & python -m venv $Venv
+$Python = Join-Path $Venv "Scripts\python.exe"
+if (!(Test-Path $Python)) {
+    if (Get-Command py -ErrorAction SilentlyContinue) { Invoke-Checked "py" @("-3", "-m", "venv", $Venv) }
+    else { Invoke-Checked "python" @("-m", "venv", $Venv) }
 }
-
-Write-Host "2/4 安装帮学助手…"
-& $vp -m pip install -q --upgrade pip
-$wheel = Get-ChildItem (Join-Path $Dir "dist\bangxue-*.whl") -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($wheel) { & $pip install -q $wheel.FullName } else { & $pip install -q $Dir }
-
-Write-Host "3/4 安装 Playwright 与浏览器组件（可能需要几分钟）…"
-& $pip install -q playwright
-& $vp -m playwright install chromium
-
-Write-Host "4/4 创建命令入口…"
-$exe = Join-Path $Venv "Scripts\bangxue.exe"
-$cmdPath = Join-Path $Bin "bangxue.cmd"
-@"
-@echo off
-"$exe" %*
-"@ | Set-Content -Encoding ASCII $cmdPath
-
-Write-Host ""
-Write-Host "✅ 安装完成！"
-Write-Host "命令入口: $cmdPath"
-Write-Host "请把 $Bin 加入 PATH（系统属性→环境变量→Path），或直接使用完整路径。"
-Write-Host ""
-Write-Host "下一步："
-Write-Host "  1) 登录一次:  `"$cmdPath`" login"
-Write-Host "  2) 环境自检:  `"$cmdPath`" doctor"
-Write-Host "  3) 开始学习:  `"$cmdPath`" run --scope 范围文件.json --state-dir bangxue_classes --concurrency 5"
+$Extra = if ($Mcp) { 'playwright,mcp' } else { 'playwright' }
+$Minor = if ($Mcp) { 10 } else { 9 }
+Invoke-Checked $Python @("-c", "import sys; sys.exit(0 if sys.version_info >= (3,$Minor) else 'Python 3.$Minor+ required')")
+Invoke-Checked $Python @("-m","pip","install","$PSScriptRoot[$Extra]")
+Invoke-Checked $Python @("-m","playwright","install","chromium")
+Invoke-Checked $Python @("-c",'from bangxue import panel; from bangxue.drivers.playwright_driver import PlaywrightDriver; assert PlaywrightDriver(profile_dir=__name__).available()')
+$Commands = @("bangxue")
+if ($Mcp) { $Commands += "bangxue-mcp" }
+foreach ($cmd in $Commands) {
+    $shim = "@echo off`r`n`"%~dp0..\venv\Scripts\$cmd.exe`" %*"
+    Set-Content -Encoding ASCII -Path (Join-Path $Bin "$cmd.cmd") -Value $shim
+}
+Write-Host "安装完成。打开控制面板："
+Write-Host "& `"$(Join-Path $Bin 'bangxue.cmd')`" panel"

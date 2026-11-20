@@ -1,99 +1,66 @@
-# 帮学助手（bangxue-zhushou）
+# 帮学助手
 
-建行学习（u.ccb.com）专题班课程自动巡航：在用户圈定的范围内逐门学习、完成后自动关页并补下一门，整班完成后自动切下一班。只驱动本机**已登录**的浏览器，不调用平台内部接口、不篡改学习记录。
+帮学助手在本机打开建行学习，帮你选择专题班、查看课表、按范围巡检并核对平台进度。账号、验证码和课程记录留在自己的电脑上。需要本人操作的内容会列入待处理。
 
-## 一键安装（推荐给非技术用户）
+## 第一次使用
+
+向分发人索取与电脑匹配的压缩包。Mac 解压后打开“帮学助手.app”，Windows 解压整个文件夹后双击“帮学助手.exe”。应用在默认浏览器打开本机控制面板，首次使用根据提示下载专用 Chromium。桌面版自带 Python 运行环境。内部测试构建未做开发者签名和公证，请按单位的软件安装要求使用。
+
+1. 打开控制面板，检查浏览器组件。在弹出的学习窗口手动登录。
+2. 读取资源库，勾选需要的班级，选择最多同时播放的门数（面板默认 1 门），再确认开始。运行期间保持电脑唤醒和助手运行。
+3. 查看课表核验结果。出现登录、验证码或人工课程时，按提示处理，再继续原任务。
+
+更多操作见[新手使用说明](新手使用说明.md)。维护者可以从本仓库 Actions 的 **Desktop acceptance** 成功运行中下载对应平台的构建产物。私有仓库外的用户可由分发人转交其中的应用压缩包。
+
+## 从源代码安装
+
+Python 3.9+ 支持 CLI 与控制面板。安装 MCP 时需使用 Python 3.10+。安装脚本会检查 Python、依赖和浏览器。已有旧版虚拟环境时会升级其中的程序，保留个人数据。
+
 **macOS / Linux**
-```bash
-bash install.sh                                  # 自动建环境、装 CLI/Playwright、生成命令入口
-~/.local/bin/bangxue login                        # 只登录一次（登录态保存到 ~/.bangxue/profile）
-~/.local/bin/bangxue doctor                       # 环境自检
-~/.local/bin/bangxue run --scope bangxue_scope.json --state-dir bangxue_classes --concurrency 5
+
+```sh
+bash install.sh
+~/.local/bin/bangxue panel
 ```
-**Windows（PowerShell）**
+
+**Windows PowerShell**
+
 ```powershell
-powershell -ExecutionPolicy Bypass -File install.ps1
-%USERPROFILE%\.bangxue\bin\bangxue.cmd login
-%USERPROFILE%\.bangxue\bin\bangxue.cmd doctor
-%USERPROFILE%\.bangxue\bin\bangxue.cmd run --scope bangxue_scope.json --state-dir bangxue_classes --concurrency 5
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+& "$env:USERPROFILE\.bangxue\bin\bangxue.cmd" panel
 ```
-> 完全不懂技术的用户可以看 **[新手使用说明.md](新手使用说明.md)**：里面有一段「直接发给 Workbuddy」的话，Agent 会帮他装。
 
-## 环境要求（手动安装时）
-- Python 3.9+
-- 本机 Chrome 已登录 u.ccb.com（或使用 `bangxue login` 的持久化浏览器登录一次）
-- 一个浏览器驱动（二选一）：
-  - **WebBridge**（当前实测）：Kimi WebBridge 扩展 + 守护进程 `127.0.0.1:10086`
-  - **Playwright**（通用）：`pip install playwright`，用 `bangxue login` 打开并登录即可（持久化模式，无需调试端口）
+## CLI 与 Workbuddy
 
-## 安装（手动）
-```bash
-cd bangxue-zhushou
-pip install -e .            # 或 pip install dist/bangxue-0.1.1-py3-none-any.whl
-```
-安装后获得两个命令：`bangxue`（CLI）和 `bangxue-mcp`（MCP 服务）。
+控制面板使用 Playwright 专用浏览器。CLI 的自动模式优先连接已有 WebBridge；要使用与面板相同的登录资料，请在子命令前指定 `--driver playwright`，并先退出占用同一资料目录的面板。凭据到期时需重新登录。
 
-## 快速开始
-```bash
-# 1) 建范围文件：可从资源库自动生成，或按格式手写
-bangxue scope --tab "党的创新理论教育和党性教育资源库" --out bangxue_scope.json
-# 2) 范围自动续班（推荐）：刷完一个班自动找下一个
-bangxue run --scope bangxue_scope.json --state-dir bangxue_classes --concurrency 5
-
-# 单班操作
-bangxue capture --workshop "<专题班链接或ID>" --concurrency 5
-bangxue start   --state bangxue_state.json --concurrency 5
-bangxue status  --state bangxue_state.json --live
-bangxue monitor --state bangxue_state.json
-
-# 可选：页面缩放（控件被弹窗挤出视区时用）
-bangxue run ... --zoom 80
-
-# 暂停 / 恢复
-bangxue stop   --scope bangxue_scope.json --state-dir bangxue_classes
+```sh
+bangxue login
+bangxue --driver playwright doctor
+bangxue --driver playwright scope --tab "党的创新理论教育和党性教育资源库" --out bangxue_scope.json
+# 在确认生成的班级清单后启动；run 默认持续巡检
+bangxue --driver playwright run --scope bangxue_scope.json --state-dir bangxue_classes
+bangxue status --scope bangxue_scope.json --state-dir bangxue_classes
+bangxue stop --scope bangxue_scope.json --state-dir bangxue_classes
 bangxue resume --scope bangxue_scope.json --state-dir bangxue_classes
 ```
 
-## 范围文件格式（bangxue_scope.json）
-```json
-{
-  "name": "党的创新理论教育和党性教育资源库",
-  "classes": [
-    {"wid": "<班级ID>", "title": "班级名"},
-    {"wid": "<班级ID>", "title": "班级名"}
-  ]
-}
+从不同进程停止持久化 Playwright 任务时，优先在原控制面板操作。程序会保留无法确认归属的标签并报告。恢复命令解除暂停，之后用同一个范围和状态目录再次运行。外部定时器使用 `run --once`。已有单班命令 `capture/start/status/monitor` 可继续使用。
+
+## MCP
+
+用 `bash install.sh --mcp` 或 `.\install.ps1 -Mcp` 安装。将客户端的 stdio **command** 配置为安装后的绝对路径，例如 macOS 的 `~/.local/bin/bangxue-mcp`（配置时展开用户目录）或 Windows 的 `%USERPROFILE%\.bangxue\venv\Scripts\bangxue-mcp.exe`（填入实际路径）。`BANGXUE_DRIVER=playwright` 选择专用浏览器，`BANGXUE_PROFILE` 可指定专用资料目录。使用独立的 MCP 配置目录，或先退出占用同一目录的控制面板。
+
+`bangxue_run` 默认一轮，适合外部调度。设置 `continuous=true` 后在该 MCP 服务中持续运行；通过 `bangxue_stop` 暂停，`bangxue_resume` 解除暂停。单班启动与巡检复用 CLI 的规则。
+
+## 验证与打包
+
+```sh
+python -m pip install ".[playwright,mcp]" "pyinstaller>=6,<7"
+python -m playwright install chromium
+python -m unittest discover -s tests -v
+python packaging/build_desktop.py
+python packaging/smoke_desktop.py
 ```
-班级ID 从班级链接 `https://u.ccb.com/workshop/#/myworkshop/detail?id=<班级ID>` 取。
 
-## MCP（供 Workbuddy / Codex / Claude Code 等 Agent 调用）
-```json
-{"mcpServers": {"bangxue": {"command": "python", "args": ["-m", "bangxue.mcp_server"]}}}
-```
-工具：`bangxue_capture / bangxue_status / bangxue_start / bangxue_monitor / bangxue_run`。
-环境变量：`BANGXUE_STATE`（默认状态文件）、`BANGXUE_ZOOM`（默认 100）。
-
-## 文档
-- [设计说明](docs/设计说明.md)：架构、状态机、数据文件、驱动契约、扩展点、已知限制
-- [隐私与安全](docs/隐私与安全.md)：数据边界、本地存储、删除方式、上传注意
-- [新手使用说明](新手使用说明.md)：给完全不懂技术的人
-
-## 核心规则（务必了解）
-- **逐门起播**：打开一门 → 点「我要学习」→ 确认播放时间真的增长 → 才开下一门；失败即停，不批量开页。
-- **完成判定**：播放页 100% 不算数，必须回查刷新后的课程表「100%/立即回看」。
-- **完成即关**：确认完成后先关该课页面，再开下一门，不堆积页面。
-- **已完成不重复学**：每轮先同步课程表，已 100% 的班/课自动跳过。
-- **范围自动续班**：整班完成后自动切范围内下一个班，直到全部完成。
-
-## 常见问题
-| 现象 | 处理 |
-|---|---|
-| 找不到播放按钮/进度条 | 顶部弹窗顶动布局；工具会自动关弹窗并重读坐标。仍不行加 `--zoom 80`（或 66/60） |
-| 起播后时间不动 | 工具会重试并重新定位播放器；持续失败会报告并停止开新页 |
-| 4008/缓冲超时 | 记录进度 → 降并发 → 刷新一次 → 仍失败从课程表重进 |
-| 登录失效/验证码 | 工具会暂停并报告，不绕过验证 |
-| 页面显示 100% 但课程表没更新 | 保留页面，下一轮再核，不会提前关页 |
-
-## 说明
-- 本工具用于帮助管理个人已授权的学习任务，请遵守所在单位的平台使用规则。
-- WebBridge 驱动为当前实测实现；Playwright 驱动为设计兼容（需自备调试端口 Chrome）。
+在目标操作系统上构建桌面应用。压缩包位于 `delivery/`。离线夹具模拟多页课表、失败及恢复路径，真实学时以平台返回的完整课表为准。[设计说明](docs/设计说明.md) · [隐私与安全](docs/隐私与安全.md)
