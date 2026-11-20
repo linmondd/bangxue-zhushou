@@ -466,23 +466,11 @@ def _read_capture_page(driver, table, wid):
 
 
 def _restore_table(driver, table, wid, expected, page_number):
-    driver.eval("history.back()")
-    def returned():
-        # history.back() can destroy the outgoing execution context before the
-        # next document is ready. Read only after the expected route returns.
-        if not _workshop(driver.current_url(), wid):
-            return None
-        try:
-            _guard(driver)
-            snap = _read_capture_page(driver, table, wid)
-        except BlockedPage:
-            raise
-        except TableReadError:
-            return None
-        return None if snap.get("waiting") else snap
-    snap = _wait(returned, "课程详情无法返回原班级课程表")
-    if snap == expected:
-        return
+    # The table tab was created for this capture. The platform may route to
+    # details with replaceState, so browser history cannot restore it reliably.
+    restored_tab = driver.open(workshop_url(wid), new_tab=False)
+    if restored_tab.id != table.id:
+        raise TableReadError("返回课程表时浏览器更换了原标签，已停止建表")
     for number, restored in enumerate(_pages(driver, lambda: _read_capture_page(driver, table, wid)), 1):
         if number == page_number and restored == expected:
             return
