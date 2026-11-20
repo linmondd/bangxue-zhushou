@@ -35,7 +35,7 @@ def cmd_start(args):
     st = _open_state(args.state)
     started, failed = flow.start_pending(d, st, args.concurrency)
     stmod.save(args.state, st)
-    print(f"本次确认在播 {len(started)} 门（上限 {args.concurrency}）")
+    print(f"本次确认在播 {len(started)} 门（含已在播，总上限 {args.concurrency}）")
 
 
 def cmd_login(args):

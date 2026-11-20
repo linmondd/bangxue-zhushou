@@ -454,6 +454,7 @@ def start_pending(driver, st, concurrency, log=print):
     done = set(st.get("done", [])) | actual
     st["done"] = list(done)
     active = set(st.get("active", []))
+    slots = max(0, int(concurrency) - len(active))
     pending = [c for c in courses
                if c.get("cid") and c["cid"] not in done and c["cid"] not in active
                and not c.get("manual")
@@ -462,9 +463,9 @@ def start_pending(driver, st, concurrency, log=print):
     if manual_left:
         log(f"另有 {manual_left} 门需人工学习（scorm/课程包/考试），已跳过")
     started, failed = [], None
-    log(f"逐门起播：目标上限 {concurrency} 门，确认一门在播后才开下一门")
+    log(f"逐门起播：总上限 {concurrency} 门，当前在播 {len(active)}，本次最多补 {slots} 门")
     for c in pending:
-        if len(started) >= concurrency:
+        if len(started) >= slots:
             break
         r = start(driver, c["cid"], wid, log=log)
         if r.get("ok"):
