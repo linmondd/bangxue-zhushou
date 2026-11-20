@@ -1,0 +1,138 @@
+"""班级队列：在给定范围内，刷完一个班自动找下一个（未报名先报名），直到范围内全部完成。"""
+import json, os, time
+
+from . import classes, flow, monitor, state as stmod
+
+
+def _load(path, default):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+
+def _save(path, obj):
+    d = os.path.dirname(os.path.abspath(path))
+    os.makedirs(d, exist_ok=True)
+    import tempfile
+    fd, tmp = tempfile.mkstemp(dir=d, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(obj, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def run_cycle(driver, scope_path, state_dir, concurrency=5, log=print):
+    os.makedirs(state_dir, exist_ok=True)
+    prog_path = os.path.join(state_dir, "_scope_state.json")
+    lock = stmod.acquire_lock(prog_path)
+    if lock is None:
+        log("另一轮范围巡检正在运行，本轮跳过")
+        return
+    try:
+        _run_cycle(driver, scope_path, state_dir, concurrency, log=log)
+    finally:
+        lock.close()
+
+
+def _run_cycle(driver, scope_path, state_dir, concurrency=5, log=print):
+    scope = _load(scope_path, {})
+    classes_list = scope.get("classes", [])
+    if not classes_list:
+        log(f"范围文件为空或不存在：{scope_path}")
+        return
+    os.makedirs(state_dir, exist_ok=True)
+    prog_path = os.path.join(state_dir, "_scope_state.json")
+    prog = _load(prog_path, {"done": [], "skipped": {}, "current": None})
+    if prog.get("paused_reason"):
+        log(f"⏸ 范围已暂停（{prog['paused_reason']}），用 bangxue resume 恢复。")
+        return
+    done = set(prog.get("done", []))
+    skipped = prog.get("skipped", {})
+    cur = prog.get("current")
+    title_of = {c["wid"]: c.get("title", "") for c in classes_list}
+
+    # 1) 当前班：巡检 → 判断整班是否完成
+    if cur and cur not in done:
+        sp = os.path.join(state_dir, f"{cur}.json")
+        if os.path.exists(sp):
+            monitor.run_one(driver, sp, log=log)
+            try:
+                cst = stmod.load(sp)
+                if cst.get("paused_reason"):
+                    prog["paused_reason"] = cst["paused_reason"]
+                    _save(prog_path, prog)
+                    log(f"⏸ 班级暂停（{cst['paused_reason']}），已停止本轮")
+                    return
+            except Exception:
+                pass
+        rows = classes.read_class_table(driver, cur)
+        if classes.is_complete(rows):
+            done.add(cur)
+            prog["current"] = None
+            prog["done"] = sorted(done)
+            _save(prog_path, prog)
+            log(f"✅ 班级完成：{title_of.get(cur, '')[:26]}")
+        else:
+            d, t = classes.progress(rows) if rows else (0, 0)
+            log(f"当前班级：{title_of.get(cur, '')[:26]} 完成 {d}/{t}，下轮继续")
+            prog["done"] = sorted(done)
+            _save(prog_path, prog)
+            return
+
+    # 2) 找下一个班：已完成的跳过；未报名的先报名；然后建课表并起播
+    for c in classes_list:
+        wid = c["wid"]
+        title = c.get("title", "")
+        if wid in done or wid in skipped:
+            continue
+        rows = classes.read_class_table(driver, wid)
+        if classes.is_complete(rows):
+            done.add(wid)
+            log(f"✅ 已完成，跳过：{title[:26]}")
+            continue
+        if not rows:
+            if not classes.ensure_enrolled(driver, wid):
+                skipped[wid] = "enroll_failed"
+                log(f"⚠ 报名失败，跳过：{title[:26]}")
+                continue
+            rows = classes.read_class_table(driver, wid)
+            if not rows:
+                skipped[wid] = "no_table"
+                log(f"⚠ 无课程表，跳过：{title[:26]}")
+                continue
+        res = flow.capture(driver, wid)
+        if not res or not res.get("courses"):
+            skipped[wid] = "capture_failed"
+            log(f"⚠ 建课表失败，跳过：{title[:26]}")
+            continue
+        sp = os.path.join(state_dir, f"{wid}.json")
+        st = stmod.init_state(wid, res["courses"], concurrency)
+        stmod.save(sp, st)
+        prog["current"] = wid
+        prog["done"] = sorted(done)
+        prog["skipped"] = skipped
+        _save(prog_path, prog)
+        log(f"▶ 开始新班：{title[:26]}（{len(res['courses'])} 门）")
+        flow.start_pending(driver, st, concurrency, log=log)
+        stmod.save(sp, st)
+        if st.get("paused_reason"):
+            prog["paused_reason"] = st["paused_reason"]
+            _save(prog_path, prog)
+            log(f"⏸ 班级暂停（{st['paused_reason']}），已停止本轮")
+        return
+
+    log("🎉 范围内所有班级已全部完成")
+    prog["done"] = sorted(done)
+    prog["current"] = None
+    _save(prog_path, prog)
+
+
+def run_loop(driver, scope_path, state_dir, concurrency=5, interval_min=15, log=print):
+    while True:
+        run_cycle(driver, scope_path, state_dir, concurrency, log=log)
+        time.sleep(interval_min * 60)

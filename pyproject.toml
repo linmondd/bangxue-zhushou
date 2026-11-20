@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bangxue"
+version = "0.1.1"
+description = "帮学助手 CLI（WebBridge / Playwright 双驱动 + MCP）"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.optional-dependencies]
+playwright = ["playwright>=1.40"]
+mcp = ["mcp>=1.0"]
+
+[project.scripts]
+bangxue = "bangxue.cli:main"
+bangxue-mcp = "bangxue.mcp_server:main"
+
+[tool.setuptools.packages.find]
+include = ["bangxue*"]
