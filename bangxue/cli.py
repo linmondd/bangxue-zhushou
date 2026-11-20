@@ -12,6 +12,20 @@ def _wid(s):
     return m.group(1)
 
 
+def _watchdog(seconds):
+    """整轮硬超时：卡在某个标签时强制退出，释放进程锁，下一轮可接管。"""
+    if not seconds or seconds <= 0:
+        return
+
+    def _kill():
+        time.sleep(seconds)
+        print(f"⏱ 本轮超过 {seconds} 秒，强制结束；下轮巡检会接管已开页面", flush=True)
+        os._exit(3)
+
+    import threading
+    threading.Thread(target=_kill, daemon=True).start()
+
+
 def _open_state(path):
     try:
         return stmod.load(path)
@@ -135,6 +149,7 @@ def cmd_run(args):
     if args.loop:
         runner.run_loop(d, args.scope, args.state_dir, args.concurrency, args.interval)
     else:
+        _watchdog(args.max_seconds)
         runner.run_cycle(d, args.scope, args.state_dir, args.concurrency)
 
 
@@ -185,6 +200,7 @@ def cmd_monitor(args):
             monitor.run_one(d, args.state)
             time.sleep(args.interval * 60)
     else:
+        _watchdog(args.max_seconds)
         monitor.run_one(d, args.state)
 
 
@@ -246,12 +262,14 @@ def build_parser():
     r.add_argument("--concurrency", type=int, default=5)
     r.add_argument("--loop", action="store_true")
     r.add_argument("--interval", type=int, default=15, help="循环间隔分钟")
+    r.add_argument("--max-seconds", type=int, default=1200, help="单轮硬超时秒数（0=不限）")
     r.set_defaults(fn=cmd_run)
 
     m = sub.add_parser("monitor", help="跑一轮巡检（可 --loop）")
     m.add_argument("--state", default="bangxue_state.json")
     m.add_argument("--loop", action="store_true")
     m.add_argument("--interval", type=int, default=15, help="循环间隔分钟")
+    m.add_argument("--max-seconds", type=int, default=900, help="单轮硬超时秒数（0=不限）")
     m.set_defaults(fn=cmd_monitor)
     return p
 
