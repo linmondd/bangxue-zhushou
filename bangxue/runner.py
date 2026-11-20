@@ -84,8 +84,8 @@ def _run_cycle(driver, scope_path, state_dir, concurrency=5, log=print):
                 cst = stmod.load(sp)
                 valid = [c for c in cst.get("courses", []) if c.get("cid")]
                 done_set = set(cst.get("done", []))
-                video_left = [c for c in valid if not c.get("manual") and c["cid"] not in done_set]
-                manual_left = [c for c in valid if c.get("manual") and c["cid"] not in done_set]
+                video_left = [c for c in valid if not c.get("manual") and c["cid"] not in done_set and c.get("prog") != "100%"]
+                manual_left = [c for c in valid if c.get("manual") and c["cid"] not in done_set and c.get("prog") != "100%"]
                 unmapped = [c for c in cst.get("courses", []) if not c.get("cid")]
             except Exception:
                 video_left, manual_left, unmapped = [1], [], []
