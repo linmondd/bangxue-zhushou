@@ -172,8 +172,10 @@ def cmd_status(args):
             st = _read(os.path.join(args.state_dir, fn), None)
             if not st:
                 continue
-            done = len(st.get("done", []))
-            total = len([c for c in st.get("courses", []) if c.get("cid")])
+            done_set = set(st.get("done", []))
+            valid = {c["cid"] for c in st.get("courses", []) if c.get("cid")}
+            done = len(done_set & valid)
+            total = len(valid)
             act = len(st.get("active", []))
             pr = st.get("paused_reason", "")
             print(f"  {titles.get(wid, wid)[:30]:<32} {done}/{total}  在播{act}" + (f"  ⏸{pr}" if pr else ""))

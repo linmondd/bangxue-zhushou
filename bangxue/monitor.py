@@ -21,6 +21,8 @@ def _run(driver, state_path, log=print):
     courses = st["courses"]
     active = list(st.get("active", []))
     done = st.setdefault("done", [])
+    if len(done) != len(set(done)):
+        done[:] = list(dict.fromkeys(done))
     done_open = st.setdefault("done_open", [])
     last_ct = st.setdefault("last_ct", {})
     failed = st.setdefault("failed", {})
@@ -106,7 +108,8 @@ def _run(driver, state_path, log=print):
         if hit_end:
             v = flow.verify(driver, wid, info.get("title", ""))
             if v.get("confirmed"):
-                done.append(cid)
+                if cid not in done:
+                    done.append(cid)
                 report.append(f"✔完成(已回验) {info.get('title', cid)[:22]} 表={v.get('prog')}{v.get('act','')}")
                 if not flow.close(driver, cid, wid):
                     done_open.append(cid)
