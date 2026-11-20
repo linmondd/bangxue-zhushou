@@ -1,5 +1,5 @@
 """班级队列：在给定范围内，刷完一个班自动找下一个（未报名先报名），直到范围内全部完成。"""
-import json, os, time
+import json, os, re, time
 
 from . import classes, flow, monitor, state as stmod
 
@@ -55,6 +55,29 @@ def _run_cycle(driver, scope_path, state_dir, concurrency=5, log=print):
     skipped = prog.get("skipped", {})
     manual_classes = prog.setdefault("manual", {})
     cur = prog.get("current")
+    # 清理本会话残留标签：只保留当前班仍在播的视频，防止标签越堆越多拖垮定位
+    try:
+        keep = set()
+        if cur:
+            sp0 = os.path.join(state_dir, f"{cur}.json")
+            if os.path.exists(sp0):
+                keep = set(stmod.load(sp0).get("active", []))
+        tabs = driver.list_tabs() or []
+        stale = []
+        for t in tabs:
+            m = re.search(r"/course/#/play/([a-f0-9-]+)", t.url)
+            if m and m.group(1) in keep:
+                continue
+            stale.append(t)
+        if stale:
+            if not keep and len(stale) > 3:
+                driver.close_all()
+            else:
+                for t in stale[:80]:
+                    driver.close(t)
+            log(f"清理会话残留标签 {len(stale)} 个（保留在播 {len(keep)} 门）")
+    except Exception as e:
+        log(f"清理标签失败（忽略）：{e}")
     title_of = {c["wid"]: c.get("title", "") for c in classes_list}
 
     # 1) 当前班：巡检 → 判断整班是否完成
@@ -103,12 +126,18 @@ def _run_cycle(driver, scope_path, state_dir, concurrency=5, log=print):
                 return
 
     # 2) 找下一个班：已完成的跳过；未报名的先报名；然后建课表并起播
+    try:
+        driver.open("https://learning-platform.local/portal/", new_tab=True)
+        driver.bring_to_front()
+    except Exception:
+        pass
     for c in classes_list:
         wid = c["wid"]
         title = c.get("title", "")
         if wid in done or wid in skipped or wid in manual_classes:
             continue
-        rows = classes.read_class_table(driver, wid)
+        log(f"检查：{title[:26]}")
+        rows = classes.read_class_table(driver, wid, reuse=True)
         if classes.is_complete(rows):
             done.add(wid)
             log(f"✅ 已完成，跳过：{title[:26]}")
@@ -118,7 +147,7 @@ def _run_cycle(driver, scope_path, state_dir, concurrency=5, log=print):
                 skipped[wid] = "enroll_failed"
                 log(f"⚠ 报名失败，跳过：{title[:26]}")
                 continue
-            rows = classes.read_class_table(driver, wid)
+            rows = classes.read_class_table(driver, wid, reuse=True)
             if not rows:
                 skipped[wid] = "no_table"
                 log(f"⚠ 无课程表，跳过：{title[:26]}")

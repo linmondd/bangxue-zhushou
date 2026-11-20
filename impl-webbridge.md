@@ -9,11 +9,12 @@
 
 ## 标签身份与定位（❗核心坑）
 - **身份 = (courseId, workshopId) 双匹配**：所有 `get_tab/on_play/find` 同时要求 URL 含 `/play/<cid>` 与 `workshopId=<wid>`，消除跨班误绑。✅
-- `find_tab` 按 URL 匹配**实测多标签下常命中错误标签**；做法：`list_tabs` 取精确 URL → `find_tab` → **回验 `location.href` 双匹配，不符重试（最多 40 次）**。✅
+- `find_tab` 按 URL 匹配**实测多标签下常命中错误标签**；做法：`list_tabs` 按 **tabId 取它当前真实 URL**（页面跳转后也能拿到新 URL）→ `find_tab` → **回验 `location.href` 双匹配**，不符重试。✅（0.1.6）
 - `list_tabs` 失败返回 None（不是空列表），避免把「查询失败」误当「没有标签」而重复开课。✅
 - `Page.bringToFront`：CDP 里这是**激活标签**；焦点模拟(focus-emulation)是另一条独立命令。只按实测写「切到目标标签后播放时间开始增长」。✅
 - 关页前**重新回验** `location.href` 双匹配；无法确认就不关（保留并报告）。verify 的临时课程表页关闭前也再确认一次。✅
-- Chrome tabId 同会话唯一；桥暴露 tabId 时应全程用 tabId（当前桥只按 URL，回验是补偿措施）。
+- Chrome tabId 同会话唯一；桥虽然只提供按 URL 的 `find_tab`，但 `navigate`/`list_tabs` 都返回 tabId，可先用 tabId 查当前 URL 再 `find_tab`，避免跳转后按旧 URL 找不到。✅
+- ❗**会话标签会越堆越多**（实测 67 个），标签一多选择和点击都会错。每轮开头清理残留，只保留当前班 `active` 的在播视频；临时标签用完立即关。✅
 
 ## 入口（资源库 hash 路由）
 - 资源库正确地址：`https://learning-platform.local/portal/#/centralizedResource`。直拼 `#@command:centralizedResource` 会 404。班详情：`/workshop/#/detail?id=<wid>`，已报名后看 `/workshop/#/myworkshop/detail?id=<wid>`。
@@ -52,3 +53,4 @@
 - 2026-11-20：5 路并发稳定，2 小时完成 5 门自动补位（WebBridge 实现）。✅
 - 并发上限未验证；以稳定为准逐步加。❗
 - 2026-11-20 对抗性审查后修补：双匹配身份/真起播/关页回验/进程锁/原子写/丢标签重入队/去 window.open 注入。✅（编译与静态校验通过；未再跑真实刷课回归）
+- 2026-11-21 夜间实测修补：`use` 改为按 tabId 查当前 URL；报名/「我要学习」直接点 `button`（文字外包图标，旧叶子选择器必失败）；每轮清理残留标签（实测堆到 67 个）；临时标签用完必关。✅（真实跑通：10 门并发、全部 2.0x、10 个标签无堆积）

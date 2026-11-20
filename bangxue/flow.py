@@ -70,10 +70,17 @@ PICK_2X = r"""
 
 ENTER_JS = r"""
 (function(){
-  var els=[...document.querySelectorAll("*")].filter(function(e){
-    return e.children.length===0 && /^(我要学习|继续学习|立即学习|立即报名)$/.test(e.textContent.trim())
+  var all=[...document.querySelectorAll("button,.edit-block")];
+  var els=all.filter(function(e){
+    return /(我要学习|继续学习|立即学习|立即报名|解锁并立即学习)/.test(e.textContent.trim())
       && e.getBoundingClientRect().width>0;
   });
+  if(!els.length){
+    els=[...document.querySelectorAll("*")].filter(function(e){
+      return e.children.length===0 && /^(我要学习|继续学习|立即学习|立即报名)$/.test(e.textContent.trim())
+        && e.getBoundingClientRect().width>0;
+    });
+  }
   if(!els.length) return "nobtn";
   var el=els[0];
   el.scrollIntoView({block:"center"});
@@ -367,9 +374,9 @@ def enter_play(driver, cid, wid, log=print):
             time.sleep(0.8)
             pt = _find(driver, cid, wid, "play")
             if pt and driver.use(pt):
-                # 播放页开在新标签：关掉详情页，保持页面最少
+                # 播放页开在新标签：关掉详情页；同标签跳转时 pt 就是详情页，不能关
                 try:
-                    if detail_tab:
+                    if detail_tab and pt.id != detail_tab.id:
                         driver.close(detail_tab)
                 except Exception:
                     pass

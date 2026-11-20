@@ -50,15 +50,18 @@ class WebBridgeDriver(Driver):
         return t
 
     def use(self, tab, retries=None):
-        """WebBridge 只能按 URL 选标签，且多标签下常打错——用 current_url 回验重试。"""
+        """按 tabId 查它现在的真实 URL，再 find_tab 选中；页面跳转后也不会找错。"""
         if retries is None:
             n = len(self.list_tabs() or [])
             retries = min(60, max(10, n * 3))
         for _ in range(retries):
-            self._cmd("find_tab", {"url": tab.url})
-            time.sleep(0.7)
-            if self.current_url() == tab.url:
-                self._current = tab
+            tabs = self.list_tabs() or []
+            cur = next((t for t in tabs if tab.id and t.id == tab.id), None)
+            target = cur.url if cur else tab.url
+            self._cmd("find_tab", {"url": target})
+            time.sleep(0.5)
+            if self.current_url() == target:
+                self._current = Tab(tab.id, target)
                 # 焦点模拟：让后台标签自认为前台，视频流才会加载（关键）
                 self.bring_to_front()
                 # 可选页面缩放（等效浏览器比例缩小），不影响用户浏览器设置；100 时清除
