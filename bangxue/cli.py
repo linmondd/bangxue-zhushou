@@ -270,6 +270,12 @@ def build_parser():
 
 
 def main(argv=None):
+    # Redirected output in Windows PowerShell may default to a legacy code
+    # page. Agent clients and log collectors need a predictable encoding.
+    if os.name == "nt":
+        for stream in (sys.stdout, sys.stderr):
+            if hasattr(stream, "reconfigure") and not stream.isatty():
+                stream.reconfigure(encoding="utf-8")
     p = build_parser()
     args = p.parse_args(argv)
     if args.cmd in ("stop", "resume") and not (args.scope or args.state):
