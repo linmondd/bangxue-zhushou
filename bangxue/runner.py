@@ -151,14 +151,11 @@ def _run_cycle(driver, scope_path, state_dir, concurrency=5, log=print):
             log(f"✅ 已完成，跳过：{title[:26]}")
             continue
         if not rows:
-            if not classes.ensure_enrolled(driver, wid, reuse=True):
-                skipped[wid] = "enroll_failed"
-                log(f"⚠ 报名失败，跳过：{title[:26]}")
-                continue
+            ok = classes.ensure_enrolled(driver, wid, reuse=True)
             rows = classes.read_class_table(driver, wid, reuse=True)
             if not rows:
-                skipped[wid] = "no_table"
-                log(f"⚠ 无课程表，跳过：{title[:26]}")
+                skipped[wid] = "enroll_failed" if not ok else "no_table"
+                log(f"⚠ {'报名失败' if not ok else '无课程表'}，跳过：{title[:26]}")
                 continue
         res = flow.capture(driver, wid)
         if not res or not res.get("courses"):
