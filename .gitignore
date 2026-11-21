@@ -1,24 +1,14 @@
-# Python
 __pycache__/
 *.py[cod]
 build/
+dist/
+delivery/
 *.egg-info/
 .venv/
 venv/
-
-# 运行状态（含个人课程进度，绝不入库）
-bangxue_state.json
-bangxue_classes/
 *_scope.json
-!examples/*.json
 *.lock
+*.pause
 *.log
-
-# 登录态（绝不入库）
-.bangxue/
-profile/
-*.sqlite
-
-# 系统
 .DS_Store
 Thumbs.db

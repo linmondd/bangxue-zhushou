@@ -1,8 +1,10 @@
 """bangxue 命令行入口。"""
-import argparse, json, os, re, sys, time
+import argparse, os, re, sys, time
+from pathlib import Path
 
-from . import flow, monitor, runner, state as stmod
+from . import environment, flow, monitor, runner, state as stmod
 from .drivers import get_driver
+from . import site_config
 
 
 def _wid(s):
@@ -36,100 +38,93 @@ def _open_state(path):
 def cmd_capture(args):
     d = get_driver(args.driver, zoom=args.zoom, profile_dir=args.profile)
     wid = _wid(args.workshop)
-    res = flow.capture(d, wid)
-    if res is None:
-        sys.exit(1)
-    st = stmod.init_state(wid, res["courses"], args.concurrency)
-    stmod.save(args.state, st)
-    print(f"课表已保存: {args.state}（{len(res['courses'])} 门）")
+    capture_state(d, wid, args.state, args.concurrency)
+
+
+def capture_state(driver, wid, path, concurrency, log=print):
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    lock = stmod.acquire_lock(str(path))
+    if lock is None:
+        raise RuntimeError("状态文件正在使用，请稍后重试")
+    try:
+        if os.path.exists(path):
+            old = stmod.load(path)
+            if old.get("active") or old.get("owned_tabs") or old.get("paused_reason"):
+                raise RuntimeError("已有任务仍在使用这个状态文件。请继续原任务或选择新的状态文件")
+        res = flow.capture(driver, wid, log=log)
+        if not res or not res.get("courses"):
+            raise RuntimeError("没有读到可核对的课程表")
+        st = stmod.init_state(wid, res["courses"], concurrency)
+        stmod.save(path, st)
+        log(f"课表已保存到 {path}，共 {len(res['courses'])} 门")
+    finally:
+        lock.close()
 
 
 def cmd_start(args):
     d = get_driver(args.driver, zoom=args.zoom, profile_dir=args.profile)
-    st = _open_state(args.state)
-    _watchdog(args.max_seconds)
-    started, failed = flow.start_pending(d, st, args.concurrency)
-    stmod.save(args.state, st)
-    print(f"本次确认在播 {len(started)} 门（含已在播，总上限 {args.concurrency}）")
+    return monitor.start_one(d, args.state, args.concurrency)
 
 
 def cmd_login(args):
     from .drivers.playwright_driver import PlaywrightDriver
     d = PlaywrightDriver(profile_dir=args.profile, headless=False)
     if not d.available():
-        sys.exit("未安装 playwright：pip install playwright && python -m playwright install chromium")
-    d.open("https://learning-platform.local/portal/", new_tab=False)
-    print(f"已打开在线学习平台，请在弹出的浏览器里登录。最多等待 {args.timeout} 秒…")
-    for _ in range(max(1, args.timeout // 3)):
-        time.sleep(3)
-        try:
-            txt = d.eval("document.body?document.body.innerText:''") or ""
-        except Exception:
-            txt = ""
-        if isinstance(txt, str) and ("退出登录" in txt or "我的专题班" in txt):
-            print(f"✅ 登录成功，登录态已保存到 {args.profile}")
-            return
-    print("⚠ 未检测到登录成功；可重试 bangxue login")
+        sys.exit("浏览器组件尚未就绪，请打开控制面板修复或重新运行安装程序")
+    try:
+        d.open(site_config.site_url("/portal/"), new_tab=True)
+        print(f"请在专用浏览器中登录，最多等待 {args.timeout} 秒。")
+        until = time.monotonic() + args.timeout
+        while time.monotonic() < until:
+            if environment.login_status(d) == "authenticated":
+                print("已在平台页面确认登录")
+                return
+            time.sleep(1)
+        sys.exit("未能从平台页面确认登录。请重新登录或在面板里查看状态")
+    finally:
+        d.shutdown()
 
 
 def cmd_doctor(args):
-    import bangxue as _pkg
-    from .drivers import WebBridgeDriver, PlaywrightDriver
-    print(f"帮学助手 {_pkg.__version__}")
-    print(f"Python: {sys.version.split()[0]}")
-    print(f"登录配置目录: {args.profile} " + ("存在" if os.path.isdir(args.profile) else "不存在（先运行 bangxue login）"))
-    print(f"WebBridge 可用: {WebBridgeDriver(session='帮学助手').available()}")
-    print(f"Playwright 可用: {PlaywrightDriver(profile_dir=args.profile).available()}")
-    print("建议: WebBridge 或 Playwright 至少一个可用；两个都不可用时请重装依赖。")
+    from . import __version__
+    d = get_driver(args.driver, zoom=args.zoom, profile_dir=args.profile)
+    print(f"帮学助手 {__version__} · Python {sys.version.split()[0]} · 驱动 {d.name}")
+    if not d.available():
+        sys.exit("驱动未就绪。请打开控制面板安装浏览器组件，或检查所选的驱动")
+    try:
+        result = environment.check_session(d)
+        if result == "authenticated":
+            print("已从平台页面确认当前会话可用")
+        elif result == "login":
+            sys.exit("平台要求登录，请运行 bangxue login")
+        else:
+            sys.exit("驱动可用，暂未确认登录。请在学习窗口检查平台页面")
+    finally:
+        if hasattr(d, "shutdown"):
+            d.shutdown()
 
 
 def _read(path, default):
     try:
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
+        return stmod.load(path)
+    except FileNotFoundError:
         return default
 
 
-def _write(path, obj):
-    d = os.path.dirname(os.path.abspath(path))
-    os.makedirs(d, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(obj, f, ensure_ascii=False, indent=1)
-
-
 def cmd_stop(args):
+    from . import control
     d = get_driver(args.driver, zoom=args.zoom, profile_dir=args.profile)
-    if args.scope:
-        pp = os.path.join(args.state_dir, "_scope_state.json")
-        prog = _read(pp, {"done": [], "skipped": {}, "current": None})
-        prog["paused_reason"] = "user"
-        _write(pp, prog)
-    if args.state:
-        st = _read(args.state, None)
-        if st:
-            st["paused_reason"] = "user"
-            _write(args.state, st)
-    print("正在关闭所有标签…")
-    d.close_all()
-    print("✅ 已停止。再次运行前请先执行：bangxue resume ...")
+    return control.stop(d, args.scope, args.state_dir, args.state)
 
 
 def cmd_resume(args):
-    if args.scope:
-        pp = os.path.join(args.state_dir, "_scope_state.json")
-        prog = _read(pp, None)
-        if prog:
-            prog.pop("paused_reason", None)
-            _write(pp, prog)
-            print("范围已解除暂停")
-    if args.state:
-        st = _read(args.state, None)
-        if st:
-            st.pop("paused_reason", None)
-            _write(args.state, st)
-            print("班级已解除暂停")
-    print("✅ 已恢复，下次 bangxue run 继续。")
+    from . import control
+    return control.resume(args.scope, args.state_dir, args.state)
+
+
+def cmd_panel(args):
+    from . import panel
+    panel.main(profile_dir=args.profile)
 
 
 def cmd_scope(args):
@@ -137,21 +132,29 @@ def cmd_scope(args):
     classes = flow.read_library_classes(d, args.tab)
     if not classes:
         sys.exit("未读到班级列表（请确认已登录、资源库页面可访问）")
-    data = {"name": args.tab or "党的创新理论教育和党性教育资源库",
+    data = {"name": args.tab or "所选资源栏目",
             "classes": classes, "created_at": time.strftime("%Y-%m-%d %H:%M:%S")}
-    _write(args.out, data)
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+    stmod.save(args.out, data)
     print(f"✅ 已生成范围文件 {args.out}，共 {len(classes)} 个班")
     for i, c in enumerate(classes, 1):
         print(f"  {i}. {c['title'][:40]}")
 
 
+def cmd_audit(args):
+    from . import audit
+    d = get_driver(args.driver, zoom=args.zoom, profile_dir=args.profile)
+    report = Path(args.report) if args.report else Path(args.state_dir) / "audit.json"
+    return audit.check(d, args.scope, report)
+
+
 def cmd_run(args):
     d = get_driver(args.driver, zoom=args.zoom, profile_dir=args.profile)
+    _watchdog(args.max_seconds)
     if args.loop:
-        runner.run_loop(d, args.scope, args.state_dir, args.concurrency, args.interval)
+        return runner.run_loop(d, args.scope, args.state_dir, args.concurrency, args.interval)
     else:
-        _watchdog(args.max_seconds)
-        runner.run_cycle(d, args.scope, args.state_dir, args.concurrency)
+        return runner.run_cycle(d, args.scope, args.state_dir, args.concurrency)
 
 
 def cmd_status(args):
@@ -164,31 +167,36 @@ def cmd_status(args):
         print(f"范围: {scope.get('name', '-')}")
         cur = prog.get("current")
         print(f"当前班: {titles.get(cur, cur or '-')}")
-        manual = prog.get("manual", {})
-        print(f"已完成班: {len(prog.get('done', []))}   需人工补完: {len(manual)}   暂停: {prog.get('paused_reason', '无')}")
+        selected = set(titles) if args.scope else None
+        completed = set(prog.get("done", []))
+        skipped = set(prog.get("skipped", {}))
+        if selected is not None:
+            completed &= selected
+            skipped &= selected
+        print(f"已完成班: {len(completed)}   待处理班: {len(skipped)}   暂停: {prog.get('paused_reason', '无')}")
         print("各班级进度:")
-        for fn in sorted(os.listdir(args.state_dir)):
+        for fn in sorted(os.listdir(args.state_dir) if os.path.isdir(args.state_dir) else []):
             if not fn.endswith(".json") or fn.startswith("_"):
                 continue
             wid = fn[:-5]
+            if selected is not None and wid not in selected:
+                continue
             st = _read(os.path.join(args.state_dir, fn), None)
             if not st:
                 continue
-            done_set = set(st.get("done", []))
-            valid = {c["cid"] for c in st.get("courses", []) if c.get("cid")}
-            done = len(done_set & valid)
-            total = len(valid)
+            done = len(set(st.get("done", [])))
+            total = len(st.get("courses", []))
             act = len(st.get("active", []))
             pr = st.get("paused_reason", "")
             tail = f"  ⏸{pr}" if pr else ""
-            if wid in manual:
-                tail += f"  （剩{manual[wid]}门需人工）"
+            if wid in skipped:
+                tail += f"  待处理：{prog.get('skipped', {}).get(wid)}"
             print(f"  {titles.get(wid, wid)[:30]:<32} {done}/{total}  在播{act}" + tail)
         return
     st = _open_state(args.state)
-    done = len(st.get("done", []))
+    done = len(set(st.get("done", [])))
     active = st.get("active", [])
-    total = len([c for c in st["courses"] if c.get("cid")])
+    total = len(st["courses"])
     unmapped = len([c for c in st["courses"] if not c.get("cid")])
     print(f"班级: {st['workshop']}")
     print(f"完成: {done}/{total}  在播: {len(active)}  待关: {len(st.get('done_open', []))}  未映射: {unmapped}")
@@ -202,13 +210,17 @@ def cmd_status(args):
 
 def cmd_monitor(args):
     d = get_driver(args.driver, zoom=args.zoom, profile_dir=args.profile)
+    _watchdog(args.max_seconds)
     if args.loop:
-        while True:
-            monitor.run_one(d, args.state)
-            time.sleep(args.interval * 60)
-    else:
-        _watchdog(args.max_seconds)
-        monitor.run_one(d, args.state)
+        return monitor.run_loop(d, args.state, args.interval)
+    return monitor.run_one(d, args.state)
+
+
+def positive_int(value):
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError("请输入大于零的整数")
+    return number
 
 
 def cmd_watch(args):
@@ -237,22 +249,27 @@ def build_parser():
     p = argparse.ArgumentParser(prog="bangxue", description="帮学助手 CLI")
     p.add_argument("--driver", default="auto", choices=["auto", "webbridge", "playwright"],
                    help="浏览器驱动（默认自动）")
-    p.add_argument("--zoom", type=int, default=100,
+    p.add_argument("--zoom", type=positive_int, default=100,
                    help="页面缩放百分比（100=不缩放；80/66/60 可让控件更紧凑，等效浏览器比例缩小）")
     p.add_argument("--profile", default=os.path.expanduser("~/.bangxue/profile"),
                    help="Playwright 持久化登录目录（默认 ~/.bangxue/profile）")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    c = sub.add_parser("capture", help="从专题班提取课表并生成状态文件")
+    sub.add_parser("panel", help="打开本机图形控制面板").set_defaults(fn=cmd_panel)
+
+    config = sub.add_parser("site", help="设置本机学习平台地址")
+    config.add_argument("--url", required=True)
+    config.set_defaults(fn=lambda args: print("本机学习平台已设置为 " + site_config.save(args.url)))
+
+    c = sub.add_parser("capture", help="提取课程表并生成状态文件")
     c.add_argument("--workshop", required=True, help="专题班链接或 workshopId")
     c.add_argument("--state", default="bangxue_state.json")
-    c.add_argument("--concurrency", type=int, default=5)
+    c.add_argument("--concurrency", type=positive_int, default=5)
     c.set_defaults(fn=cmd_capture)
 
     s = sub.add_parser("start", help="起播指定数量课程")
     s.add_argument("--state", default="bangxue_state.json")
-    s.add_argument("--concurrency", type=int, default=5)
-    s.add_argument("--max-seconds", type=int, default=600, help="单轮硬超时秒数（0=不限）")
+    s.add_argument("--concurrency", type=positive_int, default=5)
     s.set_defaults(fn=cmd_start)
 
     t = sub.add_parser("status", help="查看进度（单班或按范围汇总）")
@@ -263,11 +280,17 @@ def build_parser():
     t.set_defaults(fn=cmd_status)
 
     scp = sub.add_parser("scope", help="从资源库自动生成范围文件")
-    scp.add_argument("--tab", default="党的创新理论教育和党性教育资源库", help="资源库里的 tab 名")
+    scp.add_argument("--tab", default=None, help="资源库里的栏目名（默认当前栏目）")
     scp.add_argument("--out", default="bangxue_scope.json")
     scp.set_defaults(fn=cmd_scope)
 
-    stp = sub.add_parser("stop", help="暂停并关闭所有标签")
+    check = sub.add_parser("audit", help="只读复核所选范围的真实课程表，不修改完成状态")
+    check.add_argument("--scope", required=True, help="要复核的范围文件")
+    check.add_argument("--state-dir", default="bangxue_classes", help="报告默认保存目录")
+    check.add_argument("--report", default=None, help="复核报告路径")
+    check.set_defaults(fn=cmd_audit)
+
+    stp = sub.add_parser("stop", help="暂停任务并核对可关闭的任务页面")
     stp.add_argument("--scope", default=None)
     stp.add_argument("--state", default=None)
     stp.add_argument("--state-dir", default="bangxue_classes")
@@ -279,8 +302,8 @@ def build_parser():
     rsm.add_argument("--state-dir", default="bangxue_classes")
     rsm.set_defaults(fn=cmd_resume)
 
-    lg = sub.add_parser("login", help="首次登录：打开浏览器登录在线学习平台并保存登录态")
-    lg.add_argument("--timeout", type=int, default=300)
+    lg = sub.add_parser("login", help="首次登录：打开浏览器登录学习平台并保存登录态")
+    lg.add_argument("--timeout", type=positive_int, default=300)
     lg.set_defaults(fn=cmd_login)
 
     dc = sub.add_parser("doctor", help="环境自检：Python/驱动/登录状态")
@@ -289,17 +312,20 @@ def build_parser():
     r = sub.add_parser("run", help="按班级范围自动续班（刷完一个自动找下一个）")
     r.add_argument("--scope", default="bangxue_scope.json", help="范围文件（班级列表）")
     r.add_argument("--state-dir", default="bangxue_classes", help="各班状态文件目录")
-    r.add_argument("--concurrency", type=int, default=5)
-    r.add_argument("--loop", action="store_true")
-    r.add_argument("--interval", type=int, default=15, help="循环间隔分钟")
-    r.add_argument("--max-seconds", type=int, default=1200, help="单轮硬超时秒数（0=不限）")
+    r.add_argument("--concurrency", type=positive_int, default=5)
+    mode = r.add_mutually_exclusive_group()
+    mode.add_argument("--loop", dest="loop", action="store_true", help="持续巡检（默认）")
+    mode.add_argument("--once", dest="loop", action="store_false", help="只运行一轮，供外部调度")
+    r.set_defaults(loop=True)
+    r.add_argument("--interval", type=positive_int, default=1, help="循环间隔分钟")
+    r.add_argument("--max-seconds", type=positive_int, default=1200, help="单轮硬超时秒数")
     r.set_defaults(fn=cmd_run)
 
     m = sub.add_parser("monitor", help="跑一轮巡检（可 --loop）")
     m.add_argument("--state", default="bangxue_state.json")
     m.add_argument("--loop", action="store_true")
-    m.add_argument("--interval", type=int, default=15, help="循环间隔分钟")
-    m.add_argument("--max-seconds", type=int, default=900, help="单轮硬超时秒数（0=不限）")
+    m.add_argument("--interval", type=positive_int, default=1, help="循环间隔分钟")
+    m.add_argument("--max-seconds", type=positive_int, default=900, help="单轮硬超时秒数")
     m.set_defaults(fn=cmd_monitor)
 
     w = sub.add_parser("watch", help="常驻看门狗：每 N 秒巡检所有在播班")
@@ -310,9 +336,23 @@ def build_parser():
 
 
 def main(argv=None):
+    # Redirected output in Windows PowerShell may default to a legacy code
+    # page. Agent clients and log collectors need a predictable encoding.
+    if os.name == "nt":
+        for stream in (sys.stdout, sys.stderr):
+            if hasattr(stream, "reconfigure") and not stream.isatty():
+                stream.reconfigure(encoding="utf-8")
     p = build_parser()
     args = p.parse_args(argv)
-    args.fn(args)
+    if args.cmd in ("stop", "resume") and not (args.scope or args.state):
+        p.error("请指定 --scope 或 --state 以选定任务")
+    try:
+        result = args.fn(args)
+    except (OSError, RuntimeError, ValueError) as exc:
+        p.exit(1, f"操作未完成：{exc}\n")
+    if result in ("attention", "busy"):
+        p.exit(1)
+
 
 
 if __name__ == "__main__":

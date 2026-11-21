@@ -1,5 +1,10 @@
 """流程层：建课表 / 进入学习 / 起播 / 检查 / 完成回验 / 关页。与驱动无关。"""
 import json, re, time
+from collections import Counter
+from urllib.parse import parse_qs, urlsplit
+from contextlib import contextmanager
+
+from .site_config import is_site_url, site_url
 
 # ---------- 页面脚本 ----------
 FIND_PLAYER = r"""
@@ -89,50 +94,68 @@ ENTER_JS = r"""
 })()
 """
 
-READ_TABLE = r"""
-(function(){
-  var rows=[...document.querySelectorAll('table tbody tr')];
-  return JSON.stringify(rows.map(function(r){var t=[...r.querySelectorAll('td')];
-    return {title:(t[1]?t[1].textContent:'').trim(), prog:(t[4]?t[4].textContent:'').trim(), act:(t[5]?t[5].textContent:'').trim()};}));
+# Element UI keeps hidden tab panels and fixed-column copies in the DOM.
+_PAGE_JS = r"""
+const visible = e => !!e && e.getClientRects().length > 0 && getComputedStyle(e).visibility !== "hidden";
+const text = e => e ? e.textContent.trim() : "";
+function pager(root) {
+  const p = [...root.querySelectorAll(".el-pagination")].filter(visible);
+  if (p.length > 1) return {error:"页面含多个分页栏"};
+  if (!p.length) return {page:null,next:false,total:null};
+  const next = p[0].querySelector(".btn-next");
+  const active = p[0].querySelector(".el-pager .active,.el-pager .is-active,[aria-current=page]");
+  const total = text(p[0].querySelector(".el-pagination__total")).replaceAll(",","").match(/\d+/);
+  if (!next) return {error:"分页栏缺少下一页控件"};
+  return {page:active ? Number(text(active)) : null, next:!(next.disabled ||
+    next.getAttribute("aria-disabled")==="true" || next.classList.contains("disabled")),
+    total:total ? Number(total[0]) : null};
+}
+"""
+_TABLE_JS = _PAGE_JS + r"""
+const tables = [...document.querySelectorAll("table")].filter(t =>
+  visible(t) && t.tBodies.length && !t.closest(".el-table__fixed,.el-table__fixed-right"));
+if (tables.length !== 1) return {waiting:true};
+const table = tables[0];
+const rows = [...table.tBodies].flatMap(b => [...b.rows]).filter(visible);
+const items = rows.map(row => {
+  const c = row.cells;
+  return {type:text(c[0]), title:text(c[1]), prog:text(c[4]), act:text(c[5])};
+});
+const controls = pager(document);
+const busy = [...document.querySelectorAll(".el-loading-mask,[aria-busy=true]")].some(visible);
+const empty = [...document.querySelectorAll(".el-table__empty-text,[data-empty]")]
+  .some(e=>visible(e) && /暂无数据|暂无课程|没有课程/.test(text(e)));
+"""
+READ_TABLE = "(() => {" + _TABLE_JS + """
+return JSON.stringify({...controls, rows:items, waiting:busy || (!items.length && !empty)
+  || items.some(r=>!r.type || !r.title || !(r.prog || r.act))});
 })()
 """
+NEXT_PAGE = r"""(() => {
+const bs=[...document.querySelectorAll(".el-pagination .btn-next")].filter(b=>b.getClientRects().length);
+if(bs.length!==1 || bs[0].disabled || bs[0].getAttribute("aria-disabled")==="true") return false;
+bs[0].click(); return true;
+})()"""
 
 DETECT_BLOCK = r"""
 (function(){
-  var t=document.body?document.body.innerText:"";
-  if(/密码登录|短信登录|获取验证码|统一手机号登录/.test(t)) return "login";
-  if(/验证码/.test(t)) return "captcha";
-  if(/4008|缓冲数据超时/.test(t)) return "4008";
-  if(/已下架/.test(t)) return "removed";
-  if(/需要访问互联网/.test(t)) return "network";
+  const visible=e=>!!e && e.getClientRects().length>0 && getComputedStyle(e).visibility!=="hidden";
+  const text=document.body ? document.body.innerText : "";
+  const panels=[...document.querySelectorAll('[role=dialog],.el-dialog,form,.login-panel,.captcha')]
+    .filter(visible).map(e=>e.innerText).join("\n");
+  if (/验证码|安全验证|滑动.*验证/.test(panels) ||
+      [...document.querySelectorAll('input[placeholder*=验证码],iframe[src*=captcha]')].some(visible)) return "captcha";
+  if (/密码登录|短信登录|统一手机号登录|请先登录|请重新登录|登录已失效|登录已过期/.test(text) ||
+      [...document.querySelectorAll('input[type=password]')].some(visible) ||
+      /\/(?:login|signin)(?:[/?#]|$)/i.test(location.href)) return "login";
+  if (/^(?:请输入)?验证码$|请完成.{0,5}验证|请.{0,3}输入验证码/m.test(text)) return "captcha";
+  if (/操作过于频繁|访问过于频繁|同时学习.{0,12}限制|学习并发.{0,12}限制|已达.{0,10}并发上限|访问受限|禁止多开|不能同时学习/.test(text)) return "restriction";
+  if (/4008|缓冲数据超时/.test(text)) return "4008";
+  if (/已下架/.test(text)) return "removed";
+  if (/需要访问互联网/.test(text)) return "network";
   return "";
 })()
 """
-
-DISMISS_OVERLAYS = r"""
-(function(){
-  var closed=0;
-  var sels=[".el-dialog__headerbtn",".el-message-box__headerbtn",".el-message__closeBtn",".el-notification__closeBtn"];
-  sels.forEach(function(s){var e=document.querySelector(s); if(e){try{e.click();closed++;}catch(x){}}});
-  var texts=["知道了","我知道了","关闭"];
-  var btns=[...document.querySelectorAll("button,.el-button,span,div")].filter(function(e){
-    if(e.children.length>0) return false;
-    if(texts.indexOf(e.textContent.trim())<0) return false;
-    var b=e.getBoundingClientRect();
-    if(!b.width||!b.height) return false;
-    return !!e.closest(".el-dialog,.el-message-box,.el-message,.el-notification");
-  });
-  btns.forEach(function(e){try{e.click();closed++;}catch(x){}});
-  return closed;
-})()
-"""
-
-def dismiss_overlays(driver):
-    """操作前关闭会顶动布局的弹窗/提示（知道了/关闭/×），返回关闭数量。"""
-    try:
-        return driver.eval(DISMISS_OVERLAYS) or 0
-    except Exception:
-        return 0
 
 def detect_block(driver):
     """识别登录失效/验证码/4008/下架等系统级阻断，返回原因或空串。"""
@@ -141,36 +164,126 @@ def detect_block(driver):
     except Exception:
         return ""
 
-def read_table_rows(driver, max_pages=10):
-    """读课程表；若存在可用“下一页”则逐页累积（最多 10 页）。"""
-    rows = []
+class TableReadError(RuntimeError):
+    """无法证明页面或课程表完整，调用方应保留已有状态。"""
+
+
+class CourseListChanged(TableReadError):
+    """平台课程清单与状态中的清单不同，需要重新建表。"""
+
+
+class _WaitTimeout(TableReadError):
+    pass
+
+
+class BlockedPage(TableReadError):
+    def __init__(self, reason):
+        self.reason = reason
+        super().__init__(f"平台阻断：{reason}")
+
+
+def _guard(driver):
+    result = driver.eval(DETECT_BLOCK)
+    if not isinstance(result, str):
+        raise TableReadError("无法读取当前页面")
+    if result:
+        raise BlockedPage(result)
+
+
+WAIT_SECONDS = 15
+POLL_SECONDS = 0.2
+
+
+def _wait(probe, message):
+    deadline = time.monotonic() + WAIT_SECONDS
+    while True:
+        value = probe()
+        if value is not None:
+            return value
+        if time.monotonic() >= deadline:
+            raise _WaitTimeout(message)
+        time.sleep(POLL_SECONDS)
+
+
+def _json(driver, js):
+    raw = driver.eval(js)
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError):
+        raise TableReadError("页面数据无法解析")
+    if not isinstance(data, dict) or data.get("error"):
+        raise TableReadError("页面读取失败：" + str(data)[:120])
+    return data
+
+
+def _rows_key(snapshot):
+    return tuple(tuple(sorted(row.items())) for row in snapshot["rows"])
+
+
+def _pages(driver, read, max_pages=1000, advance=None):
+    previous = None
     seen = set()
-    for _ in range(max_pages):
-        try:
-            cur = json.loads(driver.eval(READ_TABLE))
-        except Exception:
-            cur = []
-        for r in cur:
-            k = (r.get("title"), r.get("prog"), r.get("act"))
-            if k not in seen:
-                seen.add(k)
-                rows.append(r)
-        nxt = driver.eval('(function(){var b=document.querySelector(".el-pagination .btn-next, button.btn-next");if(!b)return "none";if(b.disabled||String(b.className).indexOf("disabled")>=0)return "disabled";b.click();return "ok";})()')
-        if nxt != "ok":
-            break
-        time.sleep(1.2)
-    return rows
+    count = 0
+    total = None
+    for page_number in range(1, max_pages + 1):
+        last = None
+
+        def loaded():
+            nonlocal last
+            _guard(driver)
+            snap = read()
+            if snap.get("waiting"):
+                last = None
+                return None
+            key = _rows_key(snap)
+            if (snap.get("page") not in (None, page_number) or
+                    (previous is not None and key == previous)):
+                last = None
+                return None
+            # A paginator can change its selection before the AJAX rows arrive.
+            if snap != last:
+                last = snap
+                return None
+            return snap
+
+        snapshot = _wait(loaded, f"第 {page_number} 页课程数据未完整加载或仍是上一页")
+        key = _rows_key(snapshot)
+        if key in seen:
+            raise TableReadError("检测到重复分页，已停止读取")
+        seen.add(key)
+        if page_number == 1:
+            total = snapshot.get("total")
+        if total != snapshot.get("total"):
+            raise TableReadError("读取期间课程总数发生变化")
+        count += len(snapshot["rows"])
+        if not snapshot.get("rotate") and total is not None and (count > total or (not snapshot["next"] and count != total)):
+            raise TableReadError(f"课程数不一致，已读 {count} 行，页面显示 {total} 行")
+        yield snapshot
+        if not snapshot["next"]:
+            return
+        if page_number == max_pages or not (advance(snapshot) if advance else driver.eval(NEXT_PAGE) is True):
+            raise TableReadError("未能读取全部分页")
+        previous = key
+
+
+def read_table_rows(driver, max_pages=1000):
+    expected = driver.current_url()
+    def read():
+        if driver.current_url() != expected:
+            raise TableReadError("读表时页面已改变")
+        return _json(driver, READ_TABLE)
+    return [r for page in _pages(driver, read, max_pages) for r in page["rows"]]
 
 
 # ---------- 工具 ----------
 def play_url(cid, wid):
-    return f"https://learning-platform.local/course/#/play/{cid}?workshopId={wid}"
+    return site_url(f"/course/#/play/{cid}?workshopId={wid}")
 
 def detail_url(cid, wid):
-    return f"https://learning-platform.local/course/#/detail/{cid}?refresh=1&workshopId={wid}&enrefresh=1"
+    return site_url(f"/course/#/detail/{cid}?refresh=1&workshopId={wid}&enrefresh=1")
 
 def workshop_url(wid):
-    return f"https://learning-platform.local/workshop/#/myworkshop/detail?id={wid}"
+    return site_url(f"/workshop/#/myworkshop/detail?id={wid}")
 
 def _norm(s):
     s = str(s)
@@ -178,218 +291,432 @@ def _norm(s):
         s = s.replace(a, b)
     return "".join(s.split())
 
-def _part(s):
-    m = re.search(r"[\(（]([上中下])[\)）]", str(s))
-    return m.group(1) if m else ""
+def _route(url):
+    outer = urlsplit(url or "")
+    if not is_site_url(url or ""):
+        return "", "", {}
+    fragment = urlsplit(outer.fragment)
+    return outer.path.rstrip("/"), fragment.path, parse_qs(fragment.query, keep_blank_values=True)
 
-def _find(driver, cid, wid, route):
-    tabs = driver.list_tabs()
-    if not tabs:
-        return None
-    for t in tabs:
-        if (f"/{route}/{cid}" in t.url or f"pKnowledgeId={cid}" in t.url) and f"workshopId={wid}" in t.url:
-            return t
+
+def _course(url, wid, route):
+    app, path, query = _route(url)
+    match = re.fullmatch("/" + route + r"/([A-Za-z0-9_-]+)", path)
+    if app == "/course" and query.get("workshopId") == [wid] and match:
+        if route == "play" and "pKnowledgeId" in query:
+            parents = query["pKnowledgeId"]
+            return parents[0] if len(parents) == 1 and re.fullmatch(r"[A-Za-z0-9_-]+", parents[0]) else None
+        return match.group(1)
     return None
 
+
+def _workshop(url, wid, path="/myworkshop/detail"):
+    app, fragment, params = _route(url)
+    return app == "/workshop" and fragment == path and params.get("id") == [wid]
+
+
+def _tabs(driver):
+    tabs = driver.list_tabs()
+    if tabs is None:
+        raise TableReadError("无法核实浏览器标签列表")
+    return tabs
+
+
+def _find(driver, cid, wid, route):
+    return next((t for t in _tabs(driver) if _course(t.url, wid, route) == cid), None)
+
+
 def _on(driver, cid, wid, route):
-    u = driver.current_url()
-    return isinstance(u, str) and (f"/{route}/{cid}" in u or f"pKnowledgeId={cid}" in u) and f"workshopId={wid}" in u
+    return _course(driver.current_url(), wid, route) == cid
+
 
 def find_tab(driver, cid, wid, route="play"):
     t = _find(driver, cid, wid, route)
-    if not t:
-        return None
-    if driver.use(t) and _on(driver, cid, wid, route):
+    if t and driver.use(t) and _on(driver, cid, wid, route):
         return t
     return None
 
-# ---------- 建课表 ----------
-LIBRARY_SCOPE_JS = r"""
-(function(){
-  var out=null, seen={}, all=document.querySelectorAll("*");
-  function walk(el){
-    var v=el.__vue__; if(!v) return;
-    var c=v;
-    while(c){
-      if(!seen[c._uid]){
-        seen[c._uid]=1;
-        var d=c.$data;
-        if(d&&d.tableList&&d.tableList.length&&c.$el&&c.$el.offsetWidth){
-          out=d.tableList.map(function(x){return {id:x.knowledgeId,title:x.title};});
-        }
-      }
-      c=c.$parent;
-    }
+
+def _owned(driver, tab):
+    make_record = getattr(driver, "owned_record", None)
+    if make_record is None:
+        raise TableReadError("驱动没有提供标签创建凭据")
+    return make_record(tab)
+
+
+def close_owned(driver, record):
+    if not isinstance(record, dict) or record.get("id") is None or not record.get("url"):
+        return "unverified"
+    try:
+        tabs = _tabs(driver)
+        tab = next((t for t in tabs if t.id == record["id"]), None)
+        if tab is None:
+            return "missing"
+        verify_record = getattr(driver, "verify_record", None)
+        if tab.url != record["url"] or (not verify_record or not verify_record(tab, record)):
+            return "unverified"
+        return "closed" if driver.close(tab) else "unverified"
+    except Exception:
+        return "unverified"
+
+
+@contextmanager
+def _temporary(driver, url, accepts):
+    tab = driver.open(url, new_tab=True)
+    blocked = False
+    try:
+        def ready():
+            live = next((t for t in _tabs(driver) if t.id == tab.id), None)
+            if live is None or not driver.use(live):
+                raise TableReadError("无法核对刚打开的标签页")
+            _guard(driver)
+            return live if accepts(driver.current_url()) else None
+        yield _wait(ready, "未进入指定的平台页面，请核对当前登录与页面范围")
+    except BlockedPage:
+        blocked = True
+        raise
+    finally:
+        live = next((t for t in _tabs(driver) if t.id == tab.id), None)
+        if not blocked and live and accepts(live.url):
+            driver.close(live)
+
+
+def workshop_rows(driver, wid):
+    with _temporary(driver, workshop_url(wid), lambda u: _workshop(u, wid)):
+        return read_table_rows(driver)
+
+
+# ---------- 资源库范围 ----------
+_LIBRARY_PATH = "/portal/#/centralizedResource"
+_LIBRARY_TABS = _PAGE_JS + r"""
+const visibleTab = e => visible(e) && !!text(e);
+const standard = [...document.querySelectorAll('[role=tab],.el-tabs__item')].filter(visibleTab);
+let tabs = standard;
+if (!tabs.length) {
+  const roots = [...document.querySelectorAll('.centralizedr-inner')].filter(visibleTab);
+  tabs = roots.flatMap(root => {
+    const items = [...root.querySelectorAll('[role=tab],.tab-item,.tabs-item,.tab,li,button,a,span')]
+      .filter(e => visibleTab(e) && text(e) !== "换一换");
+    if (!items.length) return [root];
+    return items.filter(e => !items.some(other => other !== e && other.contains(e)));
+  });
+}
+const selected = t => [t,t.parentElement,...t.querySelectorAll("span")].some(e =>
+  e && (e===t || e.contains(t) && tabs.filter(other=>e.contains(other)).length === 1 || t.contains(e)) &&
+  (e.getAttribute('aria-selected')==="true" || e.matches(".active,.is-active,.selected,.on,.current,[data-active=true]")));
+"""
+_LIBRARY_JS = _LIBRARY_TABS + r"""
+const names = tabs.map(text);
+const active = tabs.filter(selected);
+const activeName = active.length === 1 ? text(active[0]) : "";
+const panelId = active.length === 1 ? active[0].getAttribute('aria-controls') : "";
+const panel = panelId ? document.getElementById(panelId) : null;
+const scope = panel || document;
+const base = {names, active:activeName, panel:panel ? panel.id : ""};
+if (!activeName || (panelId && (!panel || !visible(panel))) ||
+    [...scope.querySelectorAll(".el-loading-mask,[aria-busy=true]")].some(visible))
+  return {...base, waiting:true};
+const lists = new Set();
+for (const el of [scope,...scope.querySelectorAll("*")]) {
+  if (el !== document && !visible(el)) continue;
+  let c = el.__vue__;
+  while(c) {
+    if (Array.isArray(c.$data?.tableList) && visible(c.$el) &&
+        (scope === document || scope.contains(c.$el))) lists.add(c.$data.tableList);
+    c = c.$parent;
   }
-  for(var i=0;i<all.length;i++) walk(all[i]);
-  return JSON.stringify(out||[]);
-})()
+}
+if (lists.size > 1) return {...base,waiting:true};
+let rows = [];
+if (lists.size) rows = [...lists][0].map(x=>({wid:x.knowledgeId,title:x.title}));
+else {
+  for (const link of [...scope.querySelectorAll("a[href]")].filter(visible)) {
+    const u = new URL(link.href), [path, q] = u.hash.slice(1).split("?");
+    if (u.origin !== location.origin || !/^\/workshop\/?$/.test(u.pathname)
+        || !["/detail","/myworkshop/detail"].includes(path)) continue;
+    const ids = new URLSearchParams(q).getAll("id");
+    if (ids.length === 1) rows.push({wid:ids[0], title:link.title || text(link)});
+  }
+}
+const empty = [...scope.querySelectorAll(".el-table__empty-text,[data-empty]")].some(
+  e=>visible(e) && /暂无数据|暂无班级/.test(text(e)));
+const rotate = [...scope.querySelectorAll("button,a,span,div")].filter(e =>
+  visible(e) && text(e)==="换一换" && ![...e.children].some(c=>text(c)==="换一换"));
+const controls = pager(scope);
+if (rotate.length > 1 || (rotate.length && controls.page !== null))
+  return {error:"无法唯一确定资源列表翻页方式"};
+if (rotate.length) {
+  const button = rotate[0].closest("button,a,[role=button]") || rotate[0];
+  controls.rotate = true;
+  controls.next = !(button.disabled || button.getAttribute("aria-disabled")==="true" ||
+                    button.matches(".disabled,.is-disabled"));
+  const total = [...scope.querySelectorAll(".el-pagination__total,[data-total],.total")]
+    .filter(visible).find(e=>/共\s*[\d,]+\s*(条|个|项)/.test(text(e)));
+  if (total) controls.total = Number(text(total).replaceAll(",","").match(/\d+/)[0]);
+}
+return {...base,...controls,rows,waiting:rows.some(r=>!r.wid || !r.title) || (!rows.length && !empty)};
 """
 
-WORKSHOP_COURSES_JS = r"""
-(function(){
-  var el=document.querySelector('.workshop-content'), v=el&&el.__vue__;
-  if(!v||!v.$data||!v.$data.myWorkshopDetail) return '[]';
-  var d=v.$data.myWorkshopDetail;
-  var list=d.contentList||d.courseList||[];
-  return JSON.stringify({wid:d.id||'', list:list.map(function(x){
-    var t=x.filetype||x.showType||'';
-    return {cid:x.knowledgeId||'', title:x.knowledgeName||x.title||'',
-            prog:(x.progress===null||x.progress===undefined)?'':String(x.progress)+'%',
-            type:t, kngType:x.kngType||'', url:x.kngDetailUrl||''};
-  })});
-})()
+_LIBRARY_NEXT = _LIBRARY_TABS + r"""
+const active = tabs.filter(selected);
+if (active.length !== 1 || text(active[0]) !== chosen) return false;
+const id = active[0].getAttribute("aria-controls");
+const scope = id ? document.getElementById(id) : document;
+if (!scope || (id && !visible(scope))) return false;
+const matches = rotating ? [...scope.querySelectorAll("button,a,span,div")].filter(
+  e=>visible(e) && text(e)==="换一换" && ![...e.children].some(c=>text(c)==="换一换")) :
+  [...scope.querySelectorAll(".el-pagination .btn-next")].filter(visible);
+if (matches.length !== 1) return false;
+matches[0].click(); return true;
 """
+
+
+def _library(url):
+    return _route(url)[:2] == ("/portal", "/centralizedResource")
+
+
+def _tab_names(driver):
+    def read():
+        _guard(driver)
+        raw = driver.eval("(() => {" + _LIBRARY_TABS + "return JSON.stringify(tabs.map(text));})()")
+        names = json.loads(raw) if isinstance(raw, str) else []
+        return names or None
+    return _wait(read, "资源库未显示可选择的标签")
+
+
+def read_library_tabs(driver):
+    with _temporary(driver, site_url(_LIBRARY_PATH), _library):
+        return _tab_names(driver)
+
 
 def read_library_classes(driver, tab_name=None):
-    """从资源库页面读取某个 tab 下的班级列表（wid+title）。"""
-    tab = driver.open("https://learning-platform.local/portal/#/centralizedResource", new_tab=True)
-    time.sleep(9)
-    if tab_name:
-        try:
-            driver.eval('(function(){var e=[...document.querySelectorAll("[role=tab],.el-tabs__item")].find(function(x){return x.textContent.trim().indexOf(%s)>=0;});if(e){e.click();return true;}return false;})()' % json.dumps(tab_name))
-            time.sleep(2)
-        except Exception:
-            pass
-    try:
-        raw = driver.eval(LIBRARY_SCOPE_JS)
-        items = json.loads(raw) if raw else []
-    except Exception:
+    with _temporary(driver, site_url(_LIBRARY_PATH), _library):
+        names = _tab_names(driver)
+        def state():
+            if not _library(driver.current_url()):
+                raise TableReadError("资源库页面已改变")
+            return _json(driver, "(() => {" + _LIBRARY_JS + "})()")
+        def baseline():
+            _guard(driver)
+            snap = state()
+            return None if snap.get("waiting") else snap
+        before = _wait(baseline, "资源库初始标签未提供可核实的班级列表")
+        chosen = tab_name if tab_name is not None else before["active"]
+        if not chosen or names.count(chosen) != 1:
+            raise TableReadError(f"无法唯一定位资源库标签「{chosen}」，可选标签有 {'、'.join(names)}")
+        switched = before["active"] != chosen
+        if switched:
+            js = "const tab=tabs.find(t=>text(t)===" + json.dumps(chosen) + ");tab.click();return true;"
+            driver.eval("(() => {" + _LIBRARY_TABS + js + "})()")
+        def read():
+            snap = state()
+            if snap.get("active") != chosen:
+                return {"waiting": True}
+            if (switched and snap.get("panel") == before.get("panel") and
+                    snap.get("rows") == before["rows"]):
+                # Shared component still showing old items, or no trustworthy pre-switch baseline.
+                return {"waiting": True}
+            return snap
+        def advance(snapshot):
+            script = ("const chosen=" + json.dumps(chosen) + ";const rotating=" +
+                      json.dumps(bool(snapshot.get("rotate"))) + ";")
+            return driver.eval("(() => {" + script + _LIBRARY_NEXT + "})()") is True
+
         items = []
+        known = {}
+        previous = None
+        for page in _pages(driver, read, max_pages=100, advance=advance):
+            for row in page["rows"]:
+                wid = row["wid"]
+                if wid in known and (not page.get("rotate") or known[wid] != row["title"]):
+                    raise TableReadError("资源列表含冲突或重复班级，无法确认范围")
+                if wid not in known:
+                    known[wid] = row["title"]
+                    items.append(row)
+            if page.get("rotate"):
+                total = page.get("total")
+                if total is not None and len(items) > total:
+                    raise TableReadError("资源库班级总数与实际项目不符")
+                if total == len(items):
+                    return items
+                if total is not None and not page["next"]:
+                    raise TableReadError("换批结束但尚未收齐资源库标明的班级数")
+                if previous == len(items) and page["next"]:
+                    raise TableReadError("换一换返回重复班级，无法确认已发现全部班级")
+            previous = len(items)
+        return items
+
+
+# ---------- 建课表 ----------
+def _read_capture_page(driver, table, wid):
+    if not driver.use(table) or not _workshop(driver.current_url(), wid):
+        raise TableReadError("无法返回原课程表标签")
+    return _json(driver, READ_TABLE)
+
+
+def _restore_table(driver, table, wid, expected, page_number):
+    # The table tab was created for this capture. The platform may route to
+    # details with replaceState, so browser history cannot restore it reliably.
+    current = driver.current_url()
+    if not _course(current, wid, "detail") and not _workshop(current, wid):
+        raise TableReadError("原标签已离开本班课程，已停止返回操作")
+    driver._active_url = current
+    restored_tab = driver.open(workshop_url(wid), new_tab=False)
+    driver._active_url = restored_tab.url
+    if restored_tab.id != table.id:
+        raise TableReadError("返回课程表时浏览器更换了原标签，已停止建表")
+    for number, restored in enumerate(_pages(driver, lambda: _read_capture_page(driver, table, wid)), 1):
+        if number == page_number and restored == expected:
+            return
+        if number >= page_number:
+            break
+    raise TableReadError("详情返回后无法恢复原分页，已停止建表")
+
+
+def _capture_id(driver, table, wid, page, index, page_number):
+    if _read_capture_page(driver, table, wid) != page:
+        raise TableReadError("课程表内容已改变，无法确认当前行")
+    js = (_TABLE_JS + "const row=rows[" + str(index) + "];" + r"""
+const action = row.querySelector("td:last-child .edit-block") ||
+               row.querySelector("td:last-child a,td:last-child button") || row.cells[5];
+action.scrollIntoView({block:"center"});
+const r=action.getBoundingClientRect();
+return {x:r.x+r.width/2,y:r.y+r.height/2,row:items[rows.indexOf(row)]};
+""")
+    target = _json(driver, "(() => {" + js + "})()")
+    if target.get("row") != page["rows"][index]:
+        raise TableReadError("点击前课程行发生变化")
+    before = {t.id for t in _tabs(driver)}
+    if hasattr(driver, "mark_opener"):
+        driver.mark_opener(table)
+    driver.click(target["x"], target["y"])
+
+    def opened():
+        live = _tabs(driver)
+        current = next((t for t in live if t.id == table.id), None)
+        if current is None:
+            raise TableReadError("课程表标签已关闭")
+        if not _workshop(current.url, wid):
+            if not driver.use(current):
+                raise TableReadError("无法核对课程表跳转")
+            _guard(driver)
+            cid = _course(current.url, wid, "detail") or _course(current.url, wid, "play")
+            if cid:
+                return current, cid
+            raise TableReadError("课程操作离开了原表，未保存不完整的课表")
+        candidates = []
+        for tab in live:
+            if tab.id in before:
+                continue
+            cid = _course(tab.url, wid, "detail") or _course(tab.url, wid, "play")
+            if cid:
+                candidates.append((tab, cid))
+            elif getattr(driver, "opened_by", lambda *_: False)(tab, table) and driver.use(tab):
+                _guard(driver)
+        if len(candidates) > 1:
+            raise TableReadError("课程点击后出现多个详情页，无法确认课程编号")
+        return candidates[0] if candidates else None
+
     try:
-        driver.close(tab)
-    except Exception:
-        pass
-    return [{"wid": x.get("id"), "title": x.get("title", "")} for x in items if x.get("id")]
+        child, cid = _wait(opened, "未打开课程详情页")
+    except BlockedPage:
+        raise
+    except _WaitTimeout:
+        if not driver.use(table) or not _workshop(driver.current_url(), wid):
+            raise TableReadError("无法返回原课程表")
+        _guard(driver)
+        return ""
+    if child.id == table.id:
+        _restore_table(driver, table, wid, page, page_number)
+        return cid
+    if not driver.claim_popup(child, table) or not driver.use(child):
+        raise TableReadError("课程页来源不明，请重新读取")
+    _guard(driver)
+    if not driver.close(child):
+        raise TableReadError("课程详情未能安全关闭，已停止建表")
+    if not driver.use(table):
+        raise TableReadError("关闭课程详情后无法返回原表")
+    return cid
+
 
 def capture(driver, wid, log=print):
-    driver.open(workshop_url(wid), new_tab=False)
-    time.sleep(10)
-    href = driver.current_url()
-    if not (isinstance(href, str) and "myworkshop/detail" in href and wid in href):
-        log("ERROR: 未进入专题班课程表页，放弃建表")
-        return None
-    # 首选：直接读页面 Vue 数据里的 contentList（只读，不点按钮，不调接口）
-    try:
-        raw = driver.eval(WORKSHOP_COURSES_JS)
-        data = json.loads(raw) if raw else {}
-    except Exception:
-        data = {}
-    if isinstance(data, list):
-        page_wid, items = wid, data
-    else:
-        page_wid, items = (data.get("wid") or ""), (data.get("list") or [])
-    if page_wid and page_wid != wid:
-        log(f"ERROR: 页面班级ID不一致（期望 {wid[:8]}，实际 {page_wid[:8]}），放弃建表")
-        return None
-    if items and any(x.get("cid") for x in items):
+    with _temporary(driver, workshop_url(wid), lambda url: _workshop(url, wid)) as table:
         courses = []
-        for i, x in enumerate(items):
-            t = (x.get("type") or "").strip()
-            if "Video" in t:
-                typ = "视频"
-            elif "CoursePackage" in t:
-                typ = "课程包"
-            elif "Scorm" in t:
-                typ = "scorm"
-            elif "Exam" in t:
-                typ = "考试"
-            else:
-                typ = t
-            prog = x.get("prog", "")
-            courses.append({"i": i, "cid": x.get("cid", ""), "title": x.get("title", ""),
-                            "prog": prog, "act": ("立即回看" if prog == "100%" else "立即学习"),
-                            "type": typ, "manual": not (typ.startswith("视频") or typ == "课程包")})
-        ok = sum(1 for c in courses if c["cid"])
-        log(f"从页面数据读取 {ok}/{len(courses)} 门课程（无需逐行点击）")
-        return {"workshop": wid, "courses": courses}
-    n = driver.eval("[...document.querySelectorAll('table tbody tr')].length") or 0
-    try:
-        n = int(n)
-    except Exception:
-        n = 0
-    courses, missing = [], 0
-    for i in range(n):
-        r = driver.eval("""(function(){var rows=[...document.querySelectorAll('table tbody tr')];if(%d>=rows.length)return 'END';
-        var sp=rows[%d].querySelector('td:last-child .edit-block')||rows[%d].querySelector('td:last-child');if(!sp)return 'NOSP';
-        sp.scrollIntoView({block:'center'});var r=sp.getBoundingClientRect();
-        var tds=rows[%d].querySelectorAll('td');
-        return JSON.stringify({x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2),
-          type:(tds[0]?tds[0].textContent:'').trim(),
-          title:(tds[1]?tds[1].textContent:'').trim(), prog:(tds[4]?tds[4].textContent:'').trim(),
-          act:(tds[5]?tds[5].textContent:'').trim()});})()""" % (i, i, i, i))
-        try:
-            d = json.loads(r)
-        except Exception:
-            continue
-        before = set(t.url for t in (driver.list_tabs() or []))
-        driver.click(d["x"], d["y"])
-        cid = ""
-        for _ in range(12):
-            time.sleep(0.5)
-            now = set(t.url for t in (driver.list_tabs() or []))
-            for u in (now - before):
-                m = re.search(r"/course/#/(?:detail|play)/([a-f0-9-]+)", u)
-                if m:
-                    cid = m.group(1)
-                    break
-            if cid:
-                break
-        if cid:
-            t = _find(driver, cid, wid, "detail") or _find(driver, cid, wid, "play")
-            if t:
-                driver.close(t)
-        else:
-            missing += 1
-        rtype = (d.get("type") or "").strip()
-        manual = not rtype.startswith("视频")
-        courses.append({"i": i, "cid": cid, "title": d.get("title", ""), "prog": d.get("prog", ""),
-                        "act": d.get("act", ""), "type": rtype, "manual": manual})
-        log(f"[{i}] {'OK' if cid else 'MISS'} {cid[:8]} {d.get('prog','')} {d.get('title','')[:24]}")
-        time.sleep(0.3)
-    ok = sum(1 for c in courses if c["cid"])
-    log(f"mapped {ok}/{n}")
-    if missing:
-        log(f"⚠ 有 {missing} 门未捕获 courseId（监控会告警并计入未映射）")
-    return {"workshop": wid, "courses": courses}
+        pages = _pages(driver, lambda: _read_capture_page(driver, table, wid))
+        for page_number, page in enumerate(pages, 1):
+            for index, row in enumerate(page["rows"]):
+                cid = _capture_id(driver, table, wid, page, index, page_number)
+                courses.append({**row, "i":len(courses), "cid":cid,
+                                "manual":not (row["type"].startswith("视频") or row["type"] == "课程包")})
+                log(f"[{len(courses)-1}] {'OK' if cid else 'MISS'} {row['title'][:24]}")
+        ids = [row["cid"] for row in courses if row["cid"]]
+        if len(ids) != len(set(ids)):
+            raise TableReadError("不同课程行返回了相同的课程编号，请重新核对课程表")
+        log(f"已映射 {len(ids)}/{len(courses)} 门课程")
+        return {"workshop":wid, "courses":courses}
 
 # ---------- 进入学习 / 起播 ----------
+def _entry(driver, cid, wid, owned):
+    existing = find_tab(driver, cid, wid, "play")
+    if existing:
+        _guard(driver)
+        return existing
+    detail = driver.open(detail_url(cid, wid), new_tab=True)
+    owned.add(detail.id)
+    before = {t.id for t in _tabs(driver)}
+
+    def locate(check_button=True):
+        for tab in _tabs(driver):
+            is_detail = tab.id == detail.id
+            if not is_detail and (tab.id in before or not driver.opened_by(tab, detail)):
+                continue
+            if not driver.use(tab):
+                continue
+            if not is_detail and tab.id not in owned:
+                if not driver.claim_popup(tab, detail):
+                    raise TableReadError("无法确认播放标签来自本次学习入口")
+                owned.add(tab.id)
+            _guard(driver)
+            if _on(driver, cid, wid, "play"):
+                return ("play", tab)
+            if check_button and is_detail and _on(driver, cid, wid, "detail"):
+                raw = driver.eval(ENTER_JS)
+                if isinstance(raw, str) and raw.startswith("{"):
+                    return ("detail", (tab, json.loads(raw)))
+        return None
+
+    result, value = _wait(locate, "详情页未显示可用的学习入口")
+    if result == "play":
+        return value
+    detail, coords = value
+    _guard(driver)
+    if hasattr(driver, "mark_opener"):
+        driver.mark_opener(detail)
+    driver.hover(coords["x"], coords["y"])
+    driver.click(coords["x"], coords["y"])
+
+    def playing():
+        # A same-tab redirect keeps the original target; a popup has its own target.
+        result = locate(check_button=False)
+        return result[1] if result and result[0] == "play" else None
+
+    play = _wait(playing, "点击学习入口后未进入指定课程")
+    if play.id != detail.id:
+        current_detail = next((t for t in _tabs(driver) if t.id == detail.id), None)
+        if current_detail and _course(current_detail.url, wid, "detail") == cid:
+            driver.close(current_detail)
+    if not driver.use(play) or not _on(driver, cid, wid, "play"):
+        raise TableReadError("无法核对刚打开的播放页面")
+    return play
+
+
 def enter_play(driver, cid, wid, log=print):
-    """可靠进入学习：详情页 → 可信点击「我要学习」→ 接管 /play/。
-    注意：播放页可能开在【新标签】，不能只看当前标签是否跳转。"""
-    if _find(driver, cid, wid, "play") and find_tab(driver, cid, wid, "play"):
-        return True
-    detail_tab = driver.open(detail_url(cid, wid), new_tab=True)
-    time.sleep(8)
-    if not find_tab(driver, cid, wid, "detail"):
-        # 可能已自动跳到播放页
-        pt = _find(driver, cid, wid, "play")
-        return bool(pt and driver.use(pt))
-    for _ in range(3):
-        dismiss_overlays(driver)
-        time.sleep(0.3)
-        r = driver.eval(ENTER_JS)
-        try:
-            d = json.loads(r)
-        except Exception:
-            time.sleep(2)
-            continue
-        driver.hover(d["x"], d["y"])
-        time.sleep(0.3)
-        driver.click(d["x"], d["y"])
-        for _ in range(20):
-            time.sleep(0.8)
-            pt = _find(driver, cid, wid, "play")
-            if pt and driver.use(pt):
-                # 播放页开在新标签：关掉详情页；同标签跳转时 pt 就是详情页，不能关
-                try:
-                    if detail_tab and pt.id != detail_tab.id:
-                        driver.close(detail_tab)
-                except Exception:
-                    pass
-                return True
-        find_tab(driver, cid, wid, "detail")
-    return False
+    try:
+        return bool(_entry(driver, cid, wid, set()))
+    except TableReadError as exc:
+        log(str(exc))
+        return False
+
 
 def set_speed(driver):
     """用播放器自己的倍速菜单设 2x：悬停唤出控制栏 → 点当前倍速 → 点 2.0x → 读回 label=2.0x。"""
@@ -400,7 +727,7 @@ def set_speed(driver):
     except Exception:
         cx, cy = 700, 400
     for _ in range(3):
-        dismiss_overlays(driver)
+        _guard(driver)
         driver.hover(cx, cy)
         time.sleep(0.8)
         try:
@@ -417,40 +744,23 @@ def set_speed(driver):
         except Exception:
             pass
         time.sleep(0.5)
-    # 兜底：直接设播放器速度（界面 label 可能不同步，返回 False）
-    driver.eval('(function(){var p=window.__player;if(p){try{p.setSpeed(2);}catch(e){}}return "fallback";})()')
     return False
 
+def row_completed(row):
+    return (row.get("prog", "").strip() == "100%"
+            or (row.get("act") or "").strip() in ("立即回看", "回看", "已完成"))
+
+
 def sync_done(driver, wid, courses):
-    """刷新课程表，把已 100%/立即回看 的课标为 done（防止重复学习已完成课程）。"""
-    tab = driver.open(workshop_url(wid), new_tab=True)
-    rows = []
-    for _ in range(25):
-        time.sleep(0.7)
-        href = driver.current_url()
-        if isinstance(href, str) and "myworkshop/detail" in href and wid in href:
-            try:
-                rows = json.loads(driver.eval(READ_TABLE))
-            except Exception:
-                rows = []
-            if rows:
-                break
-    href2 = driver.current_url()
-    if isinstance(href2, str) and "myworkshop/detail" in href2 and wid in href2:
-        driver.close(tab)
-    done = set()
-    for c in courses:
-        cid = c.get("cid")
-        if not cid:
-            continue
-        nt = _norm(c.get("title", ""))
-        suf = _part(c.get("title", ""))
-        for r in rows:
-            if _norm(r.get("title", "")) == nt and _part(r.get("title", "")) == suf:
-                if r.get("prog") == "100%" or "回看" in (r.get("act") or "") or "已完成" in (r.get("act") or ""):
-                    done.add(cid)
-                break
-    return done
+    rows = workshop_rows(driver, wid)
+    count = Counter(_norm(r.get("title", "")) for r in rows)
+    saved_count = Counter(_norm(c.get("title", "")) for c in courses)
+    if count != saved_count:
+        raise CourseListChanged("当前课程表与已保存的课程清单不一致，请重新读取课程表")
+    completed = {_norm(r["title"]) for r in rows if row_completed(r)}
+    return {c["cid"] for c in courses if c.get("cid") and _norm(c["title"]) in completed
+            and count[_norm(c["title"])] == 1}
+
 
 PACKAGE_LESSONS_JS = r"""
 (function(){
@@ -490,28 +800,47 @@ def package_try_lessons(driver, cid, wid, log=print):
 
 
 def start(driver, cid, wid, confirm=True, log=print):
-    if not enter_play(driver, cid, wid, log=log):
-        driver.open(play_url(cid, wid), new_tab=True)
-        time.sleep(8)
-    t = find_tab(driver, cid, wid, "play")
-    if not t:
+    ids = set()
+    try:
+        play = _entry(driver, cid, wid, ids)
+        result = _start_player(driver, play, cid, wid, confirm, log)
+    except BlockedPage as exc:
+        result = {"ok": False, "stage": "blocked", "reason": exc.reason}
+    except TableReadError as exc:
+        log(str(exc))
+        result = {"ok": False, "stage": "entry_failed", "reason": str(exc)}
+    tabs = driver.list_tabs() or []
+    result.setdefault("owned_tabs", [])
+    for t in tabs:
+        if t.id not in ids:
+            continue
+        if result.get("stage") == "blocked":
+            # Keep the verification page; an unproven close receipt is unsafe.
+            record = {"id": t.id, "url": t.url}
+        else:
+            try:
+                record = _owned(driver, t)
+            except (RuntimeError, ValueError):
+                record = {"id": t.id, "url": t.url}
+        if record not in result["owned_tabs"]:
+            result["owned_tabs"].append(record)
+    return result
+
+
+def _start_player(driver, play, cid, wid, confirm, log):
+    guard = getattr(driver, "driver", None)
+    if guard is not None and not _on(guard, cid, wid, "play"):
         return {"ok": False, "stage": "notab"}
+    _guard(driver)
     restart_if_ended(driver, cid, wid)
-    cur = driver.current_url()
-    if isinstance(cur, str) and "pKnowledgeId=" in cur:
-        try:
-            s0 = json.loads(driver.eval(STATE))
-            if s0.get("prog") == "100%" or s0.get("ct", -1) < 0:
-                package_try_lessons(driver, cid, wid, log=log)
-        except Exception:
-            pass
-    dismiss_overlays(driver)
     time.sleep(0.3)
     if driver.eval(FIND_PLAYER) not in ("ok", "cached"):
         time.sleep(3)
+        _guard(driver)
         if driver.eval(FIND_PLAYER) not in ("ok", "cached"):
             return {"ok": False, "stage": "noplayer"}
     # 先起播（静音+播放），控制栏才可操作；再设倍速并读回
+    _guard(driver)
     try:
         driver.eval(SETUP)
     except Exception:
@@ -519,7 +848,8 @@ def start(driver, cid, wid, confirm=True, log=print):
     time.sleep(1.5)
     ok_speed = set_speed(driver)
     if not ok_speed:
-        log("⚠ 倍速未确认到 2.0x（界面可能仍显示 1.0x），继续确认起播")
+        return {"ok": False, "stage": "rate_mismatch", "reason": "页面倍速未同步，需要检查"}
+    _guard(driver)
     try:
         s1 = json.loads(driver.eval(SETUP))
     except Exception:
@@ -530,7 +860,10 @@ def start(driver, cid, wid, confirm=True, log=print):
     growth = -1
     for _ in range(3):   # 起播可能慢：最多采样 3 次，每次 14 秒
         time.sleep(14)
-        if not find_tab(driver, cid, wid, "play"):
+        if not driver.use(play):
+            return {"ok": False, "stage": "notab2"}
+        _guard(driver)
+        if not _on(driver, cid, wid, "play"):
             return {"ok": False, "stage": "notab2"}
         try:
             s2 = json.loads(driver.eval(STATE))
@@ -543,48 +876,59 @@ def start(driver, cid, wid, confirm=True, log=print):
     s2["ok"] = bool(growth > 3)
     return s2
 
-def start_pending(driver, st, concurrency, log=print):
-    """按状态文件逐门起播（供 CLI start 和班级队列共用）。返回 (started, failed)。"""
+def start_pending(driver, st, concurrency, log=print, should_stop=None):
+    """Fill available slots one by one; keep state recoverable between starts."""
+    if concurrency < 1:
+        raise ValueError("并发门数须大于零")
+    if st.get("paused_reason") or (should_stop and should_stop()):
+        log("任务已暂停")
+        return [], None
     wid = st["workshop"]
     courses = st["courses"]
+    # An incomplete live table must never be interpreted as zero completed.
     try:
         actual = sync_done(driver, wid, courses)
-        log(f"课程表核对：发现已完成 {len(actual)} 门，将跳过")
-    except Exception as e:
-        log(f"课程表核对失败，保守停止：{e}")
-        return [], None
-    done = set(st.get("done", [])) | actual
-    st["done"] = list(done)
-    active = set(st.get("active", []))
-    slots = max(0, int(concurrency) - len(active))
-    pending = [c for c in courses
-               if c.get("cid") and c["cid"] not in done and c["cid"] not in active
-               and not c.get("manual")
-               and c.get("prog") != "100%" and "回看" not in (c.get("act") or "")]
-    manual_left = len([c for c in courses if c.get("manual") and c["cid"] not in done])
-    if manual_left:
-        log(f"另有 {manual_left} 门需人工学习（scorm/考试），已跳过")
-    started, failed = [], None
-    log(f"逐门起播：总上限 {concurrency} 门，当前在播 {len(active)}，本次最多补 {slots} 门")
-    for c in pending:
-        if len(started) >= slots:
-            break
-        r = start(driver, c["cid"], wid, log=log)
-        if r.get("ok"):
-            started.append(c["cid"])
-            log(f"▶ 已确认在播 {c['title'][:24]} ct={r.get('ct')} growth={r.get('growth')} rate={r.get('rate')} label={r.get('label')}")
+    except TableReadError as exc:
+        reason = getattr(exc, "reason", None)
+        if reason in ("login", "captcha", "restriction"):
+            st["paused_reason"] = reason
         else:
-            if c.get("type") == "课程包":
-                c["manual"] = True
-                log(f"⚠ 课程包无法自动起播，转人工：{c['title'][:24]}")
-                time.sleep(1)
-                continue
-            failed = c
-            log(f"✖ 起播未确认 {c['title'][:24]} stage={r.get('stage')}，按规则停止，不再开新页")
+            st["attention_reason"] = str(exc)
+        raise
+    st["verified_table_version"] = 1
+    st["last_sync"] = time.time()
+    done = set(actual)
+    st["done"] = sorted(done)
+    active = set(st.get("active", []))
+    excluded = done | active | set(st.get("failed", {})) | set(st.get("done_open", []))
+    started = []
+    for course in courses:
+        if len(active) >= concurrency or (should_stop and should_stop()):
             break
-        time.sleep(2)
-    st["active"] = list(active | set(started))
-    return started, failed
+        cid = course.get("cid")
+        if not cid or cid in excluded or course.get("manual"):
+            continue
+        result = start(driver, cid, wid, log=log)
+        owned = st.setdefault("owned_tabs", [])
+        for record in result.get("owned_tabs", []):
+            if record not in owned:
+                owned.append(record)
+        if not result.get("ok"):
+            why = result.get("reason") or result.get("stage") or "未确认"
+            if why in ("login", "captcha", "restriction"):
+                st["paused_reason"] = why
+            else:
+                st["attention_reason"] = why
+                st.setdefault("failed", {})[cid] = why
+            log(f"未能确认起播 {course['title']}（{why}），已停止补课")
+            return started, course
+        active.add(cid)
+        excluded.add(cid)
+        st["active"] = sorted(active)
+        started.append(cid)
+        log(f"已确认在播 {course['title']}")
+    return started, None
+
 
 def check(driver, cid, wid):
     if not find_tab(driver, cid, wid, "play"):
@@ -638,9 +982,29 @@ def restart_if_ended(driver, cid, wid):
 def resume(driver, cid, wid):
     if not find_tab(driver, cid, wid, "play"):
         return {"ok": False, "stage": "notab"}
+    blk = detect_block(driver)
+    if blk:
+        return {"ok": False, "stage": "blocked", "reason": blk}
     restart_if_ended(driver, cid, wid)
     driver.eval(FIND_PLAYER)
     return driver.eval(SETUP)
+
+
+def recover_buffer(driver, cid, wid):
+    """Refresh a failed tool-owned play page once, then use its detail entry."""
+    tab = find_tab(driver, cid, wid, "play")
+    if tab is None or not driver.owns(tab):
+        return False
+    driver.eval("location.reload()")
+    time.sleep(4)
+    if driver.use(tab) and _on(driver, cid, wid, "play"):
+        _guard(driver)
+        if driver.eval(FIND_PLAYER) in ("ok", "cached"):
+            return True
+    if driver.use(tab) and driver.owns(tab):
+        driver.eval("location.href = " + json.dumps(detail_url(cid, wid)))
+        time.sleep(2)
+    return False
 
 def close(driver, cid, wid):
     t = find_tab(driver, cid, wid, "play")
@@ -651,43 +1015,19 @@ def close(driver, cid, wid):
     return driver.close(t)
 
 def verify(driver, wid, title):
-    driver.open(workshop_url(wid), new_tab=True)
-    on = False
-    for _ in range(25):
-        time.sleep(0.7)
-        href = driver.current_url()
-        if isinstance(href, str) and "myworkshop/detail" in href and wid in href:
-            on = True
-            break
-    if not on:
-        return {"confirmed": False, "reason": "wrong_page_keep"}
-    time.sleep(3)
     try:
-        rows = json.loads(driver.eval(READ_TABLE))
-    except Exception:
-        return {"confirmed": False, "reason": "table_read_fail_keep"}
-    href2 = driver.current_url()
-    if isinstance(href2, str) and "myworkshop/detail" in href2 and wid in href2:
-        tabs = driver.list_tabs() or []
-        cur = next((t for t in tabs if t.url == href2), None)
-        if cur:
-            driver.close(cur)
-    nt = _norm(title)
-    suffix = _part(title)
-    for row in rows:
-        rt = _norm(row.get("title", ""))
-        if rt and rt == nt and _part(row.get("title", "")) == suffix:
-            prog, act = row.get("prog", ""), row.get("act", "")
-            ok = (prog == "100%") or ("回看" in act) or ("已完成" in act)
-            return {"confirmed": bool(ok), "prog": prog, "act": act}
-    return {"confirmed": False, "reason": "course_row_not_found", "rows": len(rows)}
+        rows = workshop_rows(driver, wid)
+    except BlockedPage as exc:
+        return {"confirmed": False, "reason": exc.reason}
+    except TableReadError as exc:
+        return {"confirmed": False, "reason": str(exc)}
+    matches = [r for r in rows if _norm(r["title"]) == _norm(title)]
+    if len(matches) != 1:
+        return {"confirmed": False, "reason": "ambiguous_title" if matches else "course_row_not_found",
+                "rows": len(rows)}
+    row = matches[0]
+    return {"confirmed": row_completed(row), "prog": row["prog"], "act": row["act"]}
+
 
 def list_play_cids(driver, wid):
-    tabs = driver.list_tabs() or []
-    out = []
-    for t in tabs:
-        if "/play/" in t.url and f"workshopId={wid}" in t.url:
-            m = re.search(r"/play/([a-f0-9-]+)", t.url)
-            if m:
-                out.append(m.group(1))
-    return out
+    return [cid for t in _tabs(driver) if (cid := _course(t.url, wid, "play"))]

@@ -1,0 +1,40 @@
+name: Desktop acceptance
+on:
+  workflow_dispatch:
+  push:
+    branches: ['**']
+env:
+  PYTHONUTF8: "1"
+permissions:
+  contents: read
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: python -m pip install ".[playwright,mcp]" "pyinstaller>=6,<7" build
+      - run: python -m playwright install chromium
+      - run: python -m unittest discover -s tests -v
+      - name: Exercise Windows source installer
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $env:BANGXUE_HOME = Join-Path $env:RUNNER_TEMP 'fresh source install'
+          .\install.ps1 -Mcp
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & (Join-Path $env:BANGXUE_HOME 'bin\bangxue.cmd') --help
+      - run: python packaging/build_desktop.py
+      - run: python packaging/smoke_desktop.py
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Bangxue-${{ runner.os }}-${{ runner.arch }}
+          path: delivery/*.zip
+          if-no-files-found: error
