@@ -222,14 +222,14 @@ def _run_cycle(driver, scope_path, state_dir, concurrency=5, log=print):
         if wid in done or wid in skipped or wid in manual_classes:
             continue
         log(f"检查：{title[:26]}")
-        rows = classes.read_class_table(driver, wid, reuse=True)
+        rows = classes.read_class_table(driver, wid)
         if classes.is_complete(rows):
             done.add(wid)
             log(f"✅ 已完成，跳过：{title[:26]}")
             continue
         if not rows:
-            ok = classes.ensure_enrolled(driver, wid, reuse=True)
-            rows = classes.read_class_table(driver, wid, reuse=True)
+            ok = classes.ensure_enrolled(driver, wid)
+            rows = classes.read_class_table(driver, wid)
             if not rows:
                 skipped[wid] = "enroll_failed" if not ok else "no_table"
                 log(f"⚠ {'报名失败' if not ok else '无课程表'}，跳过：{title[:26]}")
