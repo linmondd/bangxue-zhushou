@@ -58,10 +58,13 @@ def _run_cycle(driver, scope_path, state_dir, concurrency=5, log=print):
     # 清理本会话残留标签：只保留当前班仍在播的视频，防止标签越堆越多拖垮定位
     try:
         keep = set()
-        if cur:
-            sp0 = os.path.join(state_dir, f"{cur}.json")
-            if os.path.exists(sp0):
-                keep = set(stmod.load(sp0).get("active", []))
+        for fn in os.listdir(state_dir):
+            if not fn.endswith(".json") or fn.startswith("_"):
+                continue
+            try:
+                keep |= set(stmod.load(os.path.join(state_dir, fn)).get("active", []))
+            except Exception:
+                pass
         tabs = driver.list_tabs() or []
         stale = []
         for t in tabs:
