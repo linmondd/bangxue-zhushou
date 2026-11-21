@@ -149,6 +149,19 @@ def _run_cycle(driver, scope_path, state_dir, concurrency=5, log=print):
         log(f"清理标签失败（忽略）：{e}")
     title_of = {c["wid"]: c.get("title", "") for c in classes_list}
 
+    # 当前班没有课表状态（例如新建/状态被清理）：转为重新建表，不能只看一眼就退出
+    if cur and cur not in done:
+        sp0 = os.path.join(state_dir, f"{cur}.json")
+        try:
+            ready = os.path.exists(sp0) and bool(stmod.load(sp0).get("courses"))
+        except Exception:
+            ready = False
+        if not ready:
+            log(f"当前班缺少课表状态，转为重新建表：{title_of.get(cur, '')[:26]}")
+            prog["current"] = None
+            _save(prog_path, prog)
+            cur = None
+
     # 1) 当前班：巡检 → 判断整班是否完成
     if cur and cur not in done:
         sp = os.path.join(state_dir, f"{cur}.json")
