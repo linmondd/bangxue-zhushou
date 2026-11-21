@@ -496,6 +496,7 @@ def start(driver, cid, wid, confirm=True, log=print):
     t = find_tab(driver, cid, wid, "play")
     if not t:
         return {"ok": False, "stage": "notab"}
+    restart_if_ended(driver, cid, wid)
     cur = driver.current_url()
     if isinstance(cur, str) and "pKnowledgeId=" in cur:
         try:
@@ -612,9 +613,32 @@ def check(driver, cid, wid):
             pass
     return s
 
+def restart_if_ended(driver, cid, wid):
+    """视频停在结尾但平台进度不是 100%：点播放器大按钮从头重播。"""
+    try:
+        s = json.loads(driver.eval(STATE))
+    except Exception:
+        return False
+    ct, dur, prog = s.get("ct", -1), s.get("dur", -1), str(s.get("prog", ""))
+    if not (isinstance(ct, (int, float)) and isinstance(dur, (int, float))
+            and dur > 0 and ct >= dur - 2 and prog != "100%"):
+        return False
+    try:
+        r = driver.eval('(function(){var b=document.querySelector(".prism-big-play-btn");if(!b)return null;var x=b.getBoundingClientRect();return JSON.stringify({x:Math.round(x.x+x.width/2),y:Math.round(x.y+x.height/2)});})()')
+        d = json.loads(r) if r else None
+        if d:
+            driver.click(d["x"], d["y"])
+            time.sleep(2)
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def resume(driver, cid, wid):
     if not find_tab(driver, cid, wid, "play"):
         return {"ok": False, "stage": "notab"}
+    restart_if_ended(driver, cid, wid)
     driver.eval(FIND_PLAYER)
     return driver.eval(SETUP)
 
