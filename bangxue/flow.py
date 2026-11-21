@@ -187,13 +187,13 @@ def _find(driver, cid, wid, route):
     if not tabs:
         return None
     for t in tabs:
-        if f"/{route}/{cid}" in t.url and f"workshopId={wid}" in t.url:
+        if (f"/{route}/{cid}" in t.url or f"pKnowledgeId={cid}" in t.url) and f"workshopId={wid}" in t.url:
             return t
     return None
 
 def _on(driver, cid, wid, route):
     u = driver.current_url()
-    return isinstance(u, str) and f"/{route}/{cid}" in u and f"workshopId={wid}" in u
+    return isinstance(u, str) and (f"/{route}/{cid}" in u or f"pKnowledgeId={cid}" in u) and f"workshopId={wid}" in u
 
 def find_tab(driver, cid, wid, route="play"):
     t = _find(driver, cid, wid, route)
@@ -299,7 +299,7 @@ def capture(driver, wid, log=print):
             prog = x.get("prog", "")
             courses.append({"i": i, "cid": x.get("cid", ""), "title": x.get("title", ""),
                             "prog": prog, "act": ("立即回看" if prog == "100%" else "立即学习"),
-                            "type": typ, "manual": not typ.startswith("视频")})
+                            "type": typ, "manual": not (typ.startswith("视频") or typ == "课程包")})
         ok = sum(1 for c in courses if c["cid"])
         log(f"从页面数据读取 {ok}/{len(courses)} 门课程（无需逐行点击）")
         return {"workshop": wid, "courses": courses}
@@ -452,6 +452,43 @@ def sync_done(driver, wid, courses):
                 break
     return done
 
+PACKAGE_LESSONS_JS = r"""
+(function(){
+  var out=[];
+  [...document.querySelectorAll('.lesson-index')].forEach(function(e,i){
+    var b=e.getBoundingClientRect();
+    if(b.width>0&&b.height>0&&b.top>=0&&b.bottom<=window.innerHeight)
+      out.push({i:i,x:Math.round(b.x+b.width/2),y:Math.round(b.y+b.height/2)});
+  });
+  return JSON.stringify(out);
+})()
+"""
+
+
+def package_try_lessons(driver, cid, wid, log=print):
+    """课程包：逐个点课时，找到第一个未完成的子课并起播。"""
+    t = find_tab(driver, cid, wid, "play")
+    if not t:
+        return False
+    try:
+        lessons = json.loads(driver.eval(PACKAGE_LESSONS_JS))
+    except Exception:
+        return False
+    for L in lessons:
+        try:
+            driver.use(t)
+            driver.click(L["x"], L["y"])
+            time.sleep(3)
+            s = json.loads(driver.eval(STATE))
+        except Exception:
+            continue
+        if s.get("ct", -1) >= 0 and s.get("prog") != "100%":
+            log(f"课程包切到未完成子课 #{L['i']+1}")
+            return True
+        t = find_tab(driver, cid, wid, "play") or t
+    return False
+
+
 def start(driver, cid, wid, confirm=True, log=print):
     if not enter_play(driver, cid, wid, log=log):
         driver.open(play_url(cid, wid), new_tab=True)
@@ -459,6 +496,14 @@ def start(driver, cid, wid, confirm=True, log=print):
     t = find_tab(driver, cid, wid, "play")
     if not t:
         return {"ok": False, "stage": "notab"}
+    cur = driver.current_url()
+    if isinstance(cur, str) and "pKnowledgeId=" in cur:
+        try:
+            s0 = json.loads(driver.eval(STATE))
+            if s0.get("prog") == "100%" or s0.get("ct", -1) < 0:
+                package_try_lessons(driver, cid, wid, log=log)
+        except Exception:
+            pass
     dismiss_overlays(driver)
     time.sleep(0.3)
     if driver.eval(FIND_PLAYER) not in ("ok", "cached"):
@@ -517,7 +562,7 @@ def start_pending(driver, st, concurrency, log=print):
                and c.get("prog") != "100%" and "回看" not in (c.get("act") or "")]
     manual_left = len([c for c in courses if c.get("manual") and c["cid"] not in done])
     if manual_left:
-        log(f"另有 {manual_left} 门需人工学习（scorm/课程包/考试），已跳过")
+        log(f"另有 {manual_left} 门需人工学习（scorm/考试），已跳过")
     started, failed = [], None
     log(f"逐门起播：总上限 {concurrency} 门，当前在播 {len(active)}，本次最多补 {slots} 门")
     for c in pending:
@@ -528,6 +573,11 @@ def start_pending(driver, st, concurrency, log=print):
             started.append(c["cid"])
             log(f"▶ 已确认在播 {c['title'][:24]} ct={r.get('ct')} growth={r.get('growth')} rate={r.get('rate')} label={r.get('label')}")
         else:
+            if c.get("type") == "课程包":
+                c["manual"] = True
+                log(f"⚠ 课程包无法自动起播，转人工：{c['title'][:24]}")
+                time.sleep(1)
+                continue
             failed = c
             log(f"✖ 起播未确认 {c['title'][:24]} stage={r.get('stage')}，按规则停止，不再开新页")
             break
@@ -554,6 +604,12 @@ def check(driver, cid, wid):
         time.sleep(1)
     if s is None:
         return {"ok": False, "stage": "stateparse"}
+    if s.get("prog") == "100%" and "pKnowledgeId=" in (driver.current_url() or ""):
+        try:
+            if package_try_lessons(driver, cid, wid):
+                s = json.loads(driver.eval(STATE))
+        except Exception:
+            pass
     return s
 
 def resume(driver, cid, wid):

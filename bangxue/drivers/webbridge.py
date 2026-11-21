@@ -86,6 +86,8 @@ class WebBridgeDriver(Driver):
         return r
 
     def click(self, x, y):
+        if self._current:
+            self.use(self._current)
         self._cmd("cdp", {"method": "Input.dispatchMouseEvent", "params": {"type": "mouseMoved", "x": x, "y": y}})
         time.sleep(0.3)
         self._cmd("cdp", {"method": "Input.dispatchMouseEvent", "params": {"type": "mousePressed", "x": x, "y": y, "button": "left", "clickCount": 1}})
@@ -93,6 +95,8 @@ class WebBridgeDriver(Driver):
         self._cmd("cdp", {"method": "Input.dispatchMouseEvent", "params": {"type": "mouseReleased", "x": x, "y": y, "button": "left", "clickCount": 1}})
 
     def hover(self, x, y):
+        if self._current:
+            self.use(self._current)
         self._cmd("cdp", {"method": "Input.dispatchMouseEvent", "params": {"type": "mouseMoved", "x": x, "y": y}})
         time.sleep(0.2)
 

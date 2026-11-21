@@ -29,7 +29,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 ## 安装（手动）
 ```bash
 cd bangxue-zhushou
-pip install -e .            # 或 pip install dist/bangxue-0.2.1-py3-none-any.whl
+pip install -e .            # 或 pip install dist/bangxue-0.2.2-py3-none-any.whl
 ```
 安装后获得两个命令：`bangxue`（CLI）和 `bangxue-mcp`（MCP 服务）。
 
