@@ -272,6 +272,9 @@ class PlaywrightDriver(Driver):
                     page = self._startup_tab
                     if not page.is_closed() and page.url == "about:blank":
                         page.close()
+                # Browser.close terminates the dedicated Chromium tree, including
+                # Windows utility children that retain cache files after tab close.
+                self._browser.close()
         finally:
             if self._pw is not None:
                 self._pw.stop()
