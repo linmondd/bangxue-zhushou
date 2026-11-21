@@ -1,5 +1,6 @@
 """Isolated Chromium fixtures intercept all requests and require no platform account."""
 import json
+import os
 import tempfile
 import threading
 import unittest
@@ -72,6 +73,10 @@ class TableBrowserTest(unittest.TestCase):
         # This temporary test profile contains no user pages.
         cls.driver._context.close()
         cls.driver.shutdown()
+        # Chromium utility processes may release a cache file after the main
+        # process exits on Windows. The OS reclaims this disposable test dir.
+        if os.name == "nt":
+            cls.profile._rmtree.ignore_errors = True
         cls.profile.cleanup()
 
     def setUp(self):
