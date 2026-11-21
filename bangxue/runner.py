@@ -207,8 +207,6 @@ def _run_cycle(driver, scope_path, state_dir, concurrency=5, log=print):
                 log(f"当前班级：{title_of.get(cur, '')[:26]} 完成 {d}/{t}，下轮继续")
                 prog["done"] = sorted(done)
                 _save(prog_path, prog)
-                _prefetch(driver, classes_list, state_dir, done, manual_classes,
-                          skipped, concurrency, cur, log=log)
                 return
 
     # 2) 找下一个班：已完成的跳过；未报名的先报名；然后建课表并起播
@@ -255,9 +253,6 @@ def _run_cycle(driver, scope_path, state_dir, concurrency=5, log=print):
             prog["paused_reason"] = st["paused_reason"]
             _save(prog_path, prog)
             log(f"⏸ 班级暂停（{st['paused_reason']}），已停止本轮")
-        else:
-            _prefetch(driver, classes_list, state_dir, done, manual_classes,
-                      skipped, concurrency, wid, log=log)
         return
 
     prog["done"] = sorted(done)
