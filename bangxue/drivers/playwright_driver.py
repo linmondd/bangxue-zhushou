@@ -281,5 +281,9 @@ class PlaywrightDriver(Driver):
             self._owned_pages.clear()
             self._startup_tab = None
             if self._process is not None:
-                self._process.poll()
+                if self._process.poll() is None:
+                    try:
+                        self._process.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        pass
                 self._process = None
