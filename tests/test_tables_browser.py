@@ -64,7 +64,7 @@ class TableBrowserTest(unittest.TestCase):
             from playwright.sync_api import sync_playwright
         except ImportError:
             raise unittest.SkipTest("需要安装 Playwright 与 Chromium")
-        cls.profile = tempfile.TemporaryDirectory()
+        cls.profile = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         cls.driver = PlaywrightDriver(profile_dir=cls.profile.name, headless=True)
         cls.driver._ensure()
 
@@ -73,10 +73,6 @@ class TableBrowserTest(unittest.TestCase):
         # This temporary test profile contains no user pages.
         cls.driver._context.close()
         cls.driver.shutdown()
-        # Chromium utility processes may release a cache file after the main
-        # process exits on Windows. The OS reclaims this disposable test dir.
-        if os.name == "nt":
-            cls.profile._rmtree.ignore_errors = True
         cls.profile.cleanup()
 
     def setUp(self):
