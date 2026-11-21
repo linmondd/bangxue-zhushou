@@ -29,7 +29,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 ## 安装（手动）
 ```bash
 cd bangxue-zhushou
-pip install -e .            # 或 pip install dist/bangxue-0.1.11-py3-none-any.whl
+pip install -e .            # 或 pip install dist/bangxue-0.2.0-py3-none-any.whl
 ```
 安装后获得两个命令：`bangxue`（CLI）和 `bangxue-mcp`（MCP 服务）。
 
@@ -45,6 +45,7 @@ bangxue capture --workshop "<专题班链接或ID>" --concurrency 5
 bangxue start   --state bangxue_state.json --concurrency 5
 bangxue status  --state bangxue_state.json --live
 bangxue monitor --state bangxue_state.json
+bangxue watch   --state-dir bangxue_classes --interval 60   # 看门狗：每60秒巡检所有在播班
 
 # 可选：页面缩放（控件被弹窗挤出视区时用）
 bangxue run ... --zoom 80

@@ -232,12 +232,12 @@ WORKSHOP_COURSES_JS = r"""
   if(!v||!v.$data||!v.$data.myWorkshopDetail) return '[]';
   var d=v.$data.myWorkshopDetail;
   var list=d.contentList||d.courseList||[];
-  return JSON.stringify(list.map(function(x){
+  return JSON.stringify({wid:d.id||'', list:list.map(function(x){
     var t=x.filetype||x.showType||'';
     return {cid:x.knowledgeId||'', title:x.knowledgeName||x.title||'',
             prog:(x.progress===null||x.progress===undefined)?'':String(x.progress)+'%',
             type:t, kngType:x.kngType||'', url:x.kngDetailUrl||''};
-  }));
+  })});
 })()
 """
 
@@ -272,9 +272,16 @@ def capture(driver, wid, log=print):
     # 首选：直接读页面 Vue 数据里的 contentList（只读，不点按钮，不调接口）
     try:
         raw = driver.eval(WORKSHOP_COURSES_JS)
-        items = json.loads(raw) if raw else []
+        data = json.loads(raw) if raw else {}
     except Exception:
-        items = []
+        data = {}
+    if isinstance(data, list):
+        page_wid, items = wid, data
+    else:
+        page_wid, items = (data.get("wid") or ""), (data.get("list") or [])
+    if page_wid and page_wid != wid:
+        log(f"ERROR: 页面班级ID不一致（期望 {wid[:8]}，实际 {page_wid[:8]}），放弃建表")
+        return None
     if items and any(x.get("cid") for x in items):
         courses = []
         for i, x in enumerate(items):

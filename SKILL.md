@@ -11,6 +11,7 @@ description: 帮学助手——当用户说「刷课」「帮学」「挂机学�
 见 `impl-webbridge.md`；换成 Computer Use 等其它工具时，本流程与验收标准照用，桥接细节替换即可。
 
 **铁律**：不调平台内部接口、不改学习记录、不绕过验证；只用平台可见控件操作 + 读页面状态。
+**标签归属铁律**：只关闭本工具在状态文件 `active` 里记录的、或本次运行自己打开的标签；**用户手动打开的标签一律不关**。按 URL 批量清理前必须让用户确认，禁止按未知 workshopId 批量关。
 判断某做法是否越界的问题：**换工具后这条规则还成立吗？** 成立→写进本文件；只与本工具相关→放进对应实现说明。
 
 ## 快速使用（推荐：CLI / MCP，而不是照着文档手点）
@@ -21,6 +22,7 @@ bangxue capture --workshop "<专题班链接>" --concurrency 5   # 建课表+状
 bangxue start   --state bangxue_state.json --concurrency 5   # 逐门起播（单班）
 bangxue status  --state bangxue_state.json --live            # 看进度
 bangxue monitor --state bangxue_state.json                   # 跑一轮巡检（单班）
+bangxue watch   --state-dir bangxue_classes --interval 60     # 常驻看门狗：每60秒巡检所有在播班
 bangxue run     --scope bangxue_scope.json --state-dir bangxue_classes --concurrency 5  # 范围自动续班（推荐）
 bangxue stop    --scope bangxue_scope.json --state-dir bangxue_classes   # 暂停并关闭标签
 bangxue resume  --scope bangxue_scope.json --state-dir bangxue_classes   # 解除暂停
@@ -30,7 +32,7 @@ bangxue resume  --scope bangxue_scope.json --state-dir bangxue_classes   # 解�
 **完成铁律：课程表确认完成后，先关掉该课页面，再开下一门**；不允许只开不关、页面堆积。
 - 驱动：`--driver auto|webbridge|playwright`（默认自动；Playwright 更通用，见 `impl-playwright.md`）。
 - MCP：`python -m bangxue.mcp_server`，提供 `bangxue_capture/status/start/monitor/run` 工具，供 Workbuddy 等支持 MCP 的 Agent 调用。
-- 定时：交给系统 cron/launchd 跑 `bangxue monitor`，**不依赖 Agent 会话在线**。
+- 定时：交给系统 cron/launchd 跑 `bangxue run`；要“播完 1–2 分钟内就关页”，再挂一个常驻 `bangxue watch --state-dir bangxue_classes --interval 60`，**不依赖 Agent 会话在线**。
 - 没有 CLI 环境时，才按下面的「通用流程」手工执行。
 
 ## 范围与自动续班（核心产品逻辑）
@@ -183,6 +185,8 @@ bangxue resume  --scope bangxue_scope.json --state-dir bangxue_classes   # 解�
 | 页面被关掉但还占着"在播" | 丢标签（notab）要从 active **移除并重新排队** |
 | 两个任务同时跑改坏状态 | **进程锁**（同一状态文件单实例）+ **原子写**（临时文件再替换） |
 | 会话标签越开越多（实测堆到 67 个），按 URL 选标签不停选错，每步卡几十秒 | 每轮开头清理残留标签，只保留**所有班状态里 `active` 的在播视频**（不只当前班）；临时读表/报名标签用完立即关；页面跳转后按 **tabId 查当前真实 URL** 再 `find_tab`，不要拿最初 URL 硬找（0.1.6/0.1.11） |
+| 播完 100% 的页面十几分钟不关，用户看着像卡住 | 15 分钟 cron 只适合兜底；再挂常驻 `bangxue watch --state-dir ... --interval 60`，每 60 秒巡检所有在播班，1–2 分钟内回验关页（0.2.0） |
+| 按 URL / 未知 workshopId 批量清标签，把**用户手动打开**的页面关了 | 只关状态文件 `active` 里的 cid 或本次运行自己打开的标签；用户手动打开的标签一律不碰；批量清理前先确认归属（0.2.0） |
 | 卡住一直等 | 所有网络/子进程调用加**超时**；一轮设**时间预算**，超时止损保存 |
 | 某个标签卡死，整轮十几分钟不返回，进程锁一直被占，后面所有定时巡检全跳过 | 除单次调用超时外，`run`/`monitor` 还要有**整轮硬超时**（默认 20/15 分钟），到点强制退出释放锁；下轮接管已开页面（0.1.3 修复） |
 | 巡检接管「已完成但页面还开着」的课时，把同一课程 ID 再次写进完成列表，`status` 显示 `37/35` | 完成列表写入前查重；统计时与本班课程表 CID 取交集（0.1.4 修复） |

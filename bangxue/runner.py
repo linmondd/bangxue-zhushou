@@ -39,6 +39,72 @@ def run_cycle(driver, scope_path, state_dir, concurrency=5, log=print):
         lock.close()
 
 
+def _active_all(state_dir):
+    act = set()
+    for fn in os.listdir(state_dir):
+        if not fn.endswith(".json") or fn.startswith("_"):
+            continue
+        try:
+            act |= set(stmod.load(os.path.join(state_dir, fn)).get("active", []))
+        except Exception:
+            pass
+    return act
+
+
+def _prefetch(driver, classes_list, state_dir, done, manual_classes, skipped,
+              concurrency, current_wid, log=print):
+    """当前班不够并发位时，从后面的班提前补播；只播放，不提前记完成。"""
+    active_all = _active_all(state_dir)
+    slots = concurrency - len(active_all)
+    if slots <= 0:
+        return
+    scan = driver.open("https://learning-platform.local/portal/", new_tab=True)
+    driver.use(scan)
+    for c in classes_list:
+        if slots <= 0:
+            break
+        wid = c["wid"]
+        if wid in done or wid in manual_classes or wid in skipped or wid == current_wid:
+            continue
+        sp = os.path.join(state_dir, f"{wid}.json")
+        if not os.path.exists(sp):
+            tabs = driver.list_tabs() or []
+            if not any(t.id == scan.id for t in tabs):
+                scan = driver.open("https://learning-platform.local/portal/", new_tab=True)
+            driver.use(scan)
+            res = flow.capture(driver, wid, log=lambda *a: None)
+            if not res:
+                if classes.ensure_enrolled(driver, wid, reuse=True):
+                    res = flow.capture(driver, wid, log=lambda *a: None)
+            if not res or not res.get("courses"):
+                log(f"预播建表失败/班级不符：{c.get('title','')[:22]}")
+                continue
+            st = stmod.init_state(wid, res["courses"], 3)
+            st["done"] = [x["cid"] for x in res["courses"]
+                          if x.get("cid") and x.get("prog") == "100%"]
+            stmod.save(sp, st)
+        try:
+            st = stmod.load(sp)
+        except Exception:
+            continue
+        st["max_concurrent"] = 3
+        pending = [x for x in st.get("courses", [])
+                   if x.get("cid") and not x.get("manual")
+                   and x["cid"] not in st.get("done", [])
+                   and x.get("prog") != "100%"
+                   and x["cid"] not in st.get("active", [])]
+        if not pending:
+            continue
+        per = min(3, slots, len(pending))
+        log(f"预播：{c.get('title', '')[:22]}（补 {per} 门）")
+        started, failed = flow.start_pending(driver, st, per, log=log)
+        stmod.save(sp, st)
+        active_all |= set(started)
+        slots -= len(started)
+        if failed:
+            break
+
+
 def _run_cycle(driver, scope_path, state_dir, concurrency=5, log=print):
     scope = _load(scope_path, {})
     classes_list = scope.get("classes", [])
@@ -87,6 +153,14 @@ def _run_cycle(driver, scope_path, state_dir, concurrency=5, log=print):
     if cur and cur not in done:
         sp = os.path.join(state_dir, f"{cur}.json")
         if os.path.exists(sp):
+            try:
+                act_all = _active_all(state_dir)
+                cst0 = stmod.load(sp)
+                other = act_all - set(cst0.get("active", []))
+                cst0["max_concurrent"] = max(1, concurrency - len(other))
+                stmod.save(sp, cst0)
+            except Exception:
+                pass
             monitor.run_one(driver, sp, log=log)
             try:
                 cst = stmod.load(sp)
@@ -133,6 +207,8 @@ def _run_cycle(driver, scope_path, state_dir, concurrency=5, log=print):
                 log(f"当前班级：{title_of.get(cur, '')[:26]} 完成 {d}/{t}，下轮继续")
                 prog["done"] = sorted(done)
                 _save(prog_path, prog)
+                _prefetch(driver, classes_list, state_dir, done, manual_classes,
+                          skipped, concurrency, cur, log=log)
                 return
 
     # 2) 找下一个班：已完成的跳过；未报名的先报名；然后建课表并起播
@@ -179,6 +255,9 @@ def _run_cycle(driver, scope_path, state_dir, concurrency=5, log=print):
             prog["paused_reason"] = st["paused_reason"]
             _save(prog_path, prog)
             log(f"⏸ 班级暂停（{st['paused_reason']}），已停止本轮")
+        else:
+            _prefetch(driver, classes_list, state_dir, done, manual_classes,
+                      skipped, concurrency, wid, log=log)
         return
 
     prog["done"] = sorted(done)

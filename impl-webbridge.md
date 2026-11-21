@@ -8,6 +8,7 @@
 - 所有 `curl` 带 `--max-time 20`，所有子进程调用带 timeout（防单点 hang 拖死巡检）。✅
 
 ## 标签身份与定位（❗核心坑）
+- **只操作本会话自己开的标签**。`list_tabs` 只返回本会话的标签，用户手动打开的标签不在其中；**绝不能**用 AppleScript/快捷键按 URL 批量关，否则会关掉用户自己开的页面（真实事故，0.2.0 写入铁律）。
 - **身份 = (courseId, workshopId) 双匹配**：所有 `get_tab/on_play/find` 同时要求 URL 含 `/play/<cid>` 与 `workshopId=<wid>`，消除跨班误绑。✅
 - `find_tab` 按 URL 匹配**实测多标签下常命中错误标签**；做法：`list_tabs` 按 **tabId 取它当前真实 URL**（页面跳转后也能拿到新 URL）→ `find_tab` → **回验 `location.href` 双匹配**，不符重试。✅（0.1.6）
 - `list_tabs` 失败返回 None（不是空列表），避免把「查询失败」误当「没有标签」而重复开课。✅

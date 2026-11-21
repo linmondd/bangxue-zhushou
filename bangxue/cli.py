@@ -211,6 +211,28 @@ def cmd_monitor(args):
         monitor.run_one(d, args.state)
 
 
+def cmd_watch(args):
+    """常驻看门狗：每 N 秒巡检所有有在播页的班，只动工具自己记录的标签。"""
+    d = get_driver(args.driver, zoom=args.zoom, profile_dir=args.profile)
+    print(f"看门狗启动：每 {args.interval} 秒巡检 {args.state_dir}（只动工具记录的标签）")
+    while True:
+        for fn in sorted(os.listdir(args.state_dir)):
+            if not fn.endswith(".json") or fn.startswith("_"):
+                continue
+            p = os.path.join(args.state_dir, fn)
+            try:
+                st = stmod.load(p)
+            except Exception:
+                continue
+            if not st.get("active"):
+                continue
+            try:
+                monitor.run_one(d, p, log=print)
+            except Exception as e:
+                print(f"看门狗巡检失败 {fn[:8]}：{e}")
+        time.sleep(args.interval)
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="bangxue", description="帮学助手 CLI")
     p.add_argument("--driver", default="auto", choices=["auto", "webbridge", "playwright"],
@@ -279,6 +301,11 @@ def build_parser():
     m.add_argument("--interval", type=int, default=15, help="循环间隔分钟")
     m.add_argument("--max-seconds", type=int, default=900, help="单轮硬超时秒数（0=不限）")
     m.set_defaults(fn=cmd_monitor)
+
+    w = sub.add_parser("watch", help="常驻看门狗：每 N 秒巡检所有在播班")
+    w.add_argument("--state-dir", default="bangxue_classes")
+    w.add_argument("--interval", type=int, default=60, help="巡检间隔秒数")
+    w.set_defaults(fn=cmd_watch)
     return p
 
 
