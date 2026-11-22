@@ -2,6 +2,7 @@
 import asyncio
 import json
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -28,6 +29,26 @@ class EntryPoints(unittest.TestCase):
         self.assertEqual(environment.login_status(driver), "login")
         driver.eval.return_value = "正在加载"
         self.assertEqual(environment.login_status(driver), "unknown")
+
+    def test_failed_browser_install_keeps_downloader_output(self):
+        try:
+            from playwright._impl import _driver
+        except ImportError:
+            self.skipTest("需要可选 Playwright 依赖")
+
+        def fail(command, **kwargs):
+            kwargs["stdout"].write(b"Download failed: certificate rejected\n")
+            self.assertEqual(subprocess.STDOUT, kwargs["stderr"])
+            raise subprocess.CalledProcessError(1, command)
+
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(Path, "home", return_value=Path(tmp)), \
+                patch.object(_driver, "compute_driver_executable", return_value=("node", "cli.js")), \
+                patch.object(environment.subprocess, "run", side_effect=fail):
+            log = Path(tmp) / ".bangxue" / "browser-install.log"
+            with self.assertRaisesRegex(RuntimeError, "browser-install.log"):
+                environment.install_browser()
+            self.assertIn("certificate rejected", log.read_text(encoding="utf-8"))
 
     def test_both_frontends_respect_total_cap_and_failure(self):
         try:

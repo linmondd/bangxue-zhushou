@@ -1,4 +1,6 @@
 """Installation and sign-in checks shared by the CLI and the local panel."""
+import os
+from pathlib import Path
 import subprocess
 from .site_config import is_site_url, site_url
 
@@ -21,8 +23,16 @@ def install_browser():
     # point. A frozen desktop application has no standalone Python binary.
     from playwright._impl._driver import compute_driver_executable, get_driver_env
     node, cli = compute_driver_executable()
-    subprocess.run([node, cli, "install", "chromium"], env=get_driver_env(),
-                   check=True, timeout=1200)
+    log = Path.home() / ".bangxue" / "browser-install.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+    try:
+        with log.open("wb") as output:
+            subprocess.run([node, cli, "install", "chromium"], env=get_driver_env(),
+                           stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT,
+                           creationflags=flags, check=True, timeout=1200)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(f"浏览器组件安装失败。请查看本机日志 {log}") from exc
 
 
 def check_session(driver, timeout=10):

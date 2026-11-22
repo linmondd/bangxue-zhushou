@@ -1,35 +1,65 @@
 """Launch the actual frozen GUI and exercise its local HTTP entry point."""
 import json
+import os
 from pathlib import Path
+import platform
 import subprocess
 import sys
 import tempfile
 import time
 from urllib import request
+from zipfile import ZipFile
 
-OUT = Path(__file__).resolve().parents[1] / "build" / "desktop"
-if sys.platform == "darwin":
-    executable = OUT / "帮学助手.app/Contents/MacOS/帮学助手"
-else:
-    executable = OUT / "帮学助手/帮学助手.exe"
+DELIVERY = Path(__file__).resolve().parents[1] / "delivery"
 
-with tempfile.TemporaryDirectory() as tmp:
+
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     root = Path(tmp)
-    proc = subprocess.Popen([str(executable), "--test-panel", tmp])
+    unpacked = root / "中文 解压目录"
+    unpacked.mkdir()
+    env = os.environ.copy()
+    if sys.platform == "darwin":
+        archive = DELIVERY / f"Bangxue-macOS-{platform.machine()}.zip"
+        subprocess.run(["ditto", "-x", "-k", str(archive), str(unpacked)], check=True)
+        executable = unpacked / "帮学助手.app/Contents/MacOS/帮学助手"
+    elif sys.platform == "win32":
+        with ZipFile(DELIVERY / "Bangxue-Windows-x64.zip") as archive:
+            archive.extractall(unpacked)
+        executable = unpacked / "帮学助手/帮学助手.exe"
+        env.pop("PLAYWRIGHT_BROWSERS_PATH", None)
+        env["LOCALAPPDATA"] = str(root / "empty-cache")
+    else:
+        raise SystemExit("当前测试支持 macOS 和 Windows 桌面包")
+    proc = subprocess.Popen([str(executable), "--test-panel", tmp], env=env)
     try:
+        link_file = root / "url.txt"
+        browser_error = root / "browser-error.txt"
         for _ in range(240):
-            if (root / "url.txt").is_file():
+            if browser_error.is_file():
+                raise RuntimeError(browser_error.read_text(encoding="utf-8"))
+            if link_file.is_file() and "#" in link_file.read_text(encoding="utf-8"):
                 break
             if proc.poll() is not None:
                 raise RuntimeError(f"Desktop application exited with {proc.returncode}")
             time.sleep(.25)
-        link = (root / "url.txt").read_text(encoding="utf-8")
+        else:
+            raise RuntimeError("打包版控制面板未在 60 秒内启动")
+        link = link_file.read_text(encoding="utf-8")
         url, token = link.split("#", 1)
         with request.urlopen(url, timeout=10) as page:
             assert "帮学助手" in page.read().decode()
         req = request.Request(url.rstrip("/") + "/api/state", headers={"X-Panel-Token": token})
-        with request.urlopen(req, timeout=10) as state:
-            assert isinstance(json.load(state), dict)
+        for _ in range(60):
+            with request.urlopen(req, timeout=10) as response:
+                state = json.load(response)
+            if not state["busy"]:
+                break
+            time.sleep(.25)
+        else:
+            raise RuntimeError("打包版环境检查超时")
+        if sys.platform == "win32":
+            assert state["setup"].get("chromium") is True, state["error"]
+            print("Bundled Chromium launched without a browser cache")
         print("Packaged panel served its UI and authenticated state")
     finally:
         proc.terminate()
