@@ -33,6 +33,14 @@ bangxue agent retry
 
 桌面安装包内的可执行程序也接收同样的参数。调用 Windows 的 `帮学助手.exe` 时，在子命令前提供 `agent --output "本机结果.json" status`，即可从本机文件读取 JSON。使用 MCP 的客户端可调用 `bangxue_agent` 执行同一组操作。
 
+## 组件不可用时的备用流程
+
+桌面版、浏览器组件或 MCP 用不了时，有本机浏览器或电脑操作能力的 Agent 可以在你授权的浏览器里直接执行。把下面这句话发给它。
+
+> 请读取 <https://github.com/linmondd/bangxue-zhushou/blob/main/docs/agent-browser-fallback.md>，用你已有的浏览器或电脑操作工具，按我给定的栏目或班级范围继续。用平台课表核验完成结果，在对话里汇报进度和待处理事项，需要本人登录或验证时再告诉我。
+
+支持 Skill 的 Agent 可载入仓库根目录的 `SKILL.md`。其他 Agent 可直接读取流程。 [Agent 浏览器流程](docs/agent-browser-fallback.md) · [SKILL.md](SKILL.md)
+
 ## 源码与独立命令
 
 Python 3.9+ 支持 CLI 与控制面板，MCP 需 Python 3.10+。macOS/Linux 运行 `bash install.sh`，Windows PowerShell 运行 `.\install.ps1`，随后执行 `bangxue panel`。MCP 安装选项为 `bash install.sh --mcp` 或 `.\install.ps1 -Mcp`。
