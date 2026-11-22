@@ -30,6 +30,27 @@ class EntryPoints(unittest.TestCase):
         driver.eval.return_value = "正在加载"
         self.assertEqual(environment.login_status(driver), "unknown")
 
+    def test_windows_state_read_and_replace_retry_a_transient_sharing_conflict(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "progress.json"
+            state.save(path, {"done": []})
+            with patch.object(state, "_WINDOWS_FILE_RETRY", True), \
+                    patch.object(state.time, "sleep"):
+                with path.open(encoding="utf-8") as valid:
+                    with patch("builtins.open", side_effect=[PermissionError("sharing"), valid]):
+                        self.assertEqual({"done": []}, state.load(path))
+                real_replace = state.os.replace
+                with patch.object(state.os, "replace") as replace:
+                    def busy_once(source, target):
+                        if replace.call_count == 1:
+                            raise PermissionError("sharing")
+                        real_replace(source, target)
+
+                    replace.side_effect = busy_once
+                    state.save(path, {"done": ["sample"]})
+                    self.assertEqual(2, replace.call_count)
+                self.assertEqual({"done": ["sample"]}, state.load(path))
+
     def test_failed_browser_install_keeps_downloader_output(self):
         try:
             from playwright._impl import _driver

@@ -7,8 +7,23 @@ import tempfile
 import time
 
 
+_WINDOWS_FILE_RETRY = os.name == "nt"
+
+
+def _file_operation(operation, *args, **kwargs):
+    # A Windows reader or scanner can briefly block an atomic replacement,
+    # and a reader can also meet a file in the middle of that transition.
+    for delay in (0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0):
+        try:
+            return operation(*args, **kwargs)
+        except PermissionError:
+            if not _WINDOWS_FILE_RETRY or not delay:
+                raise
+            time.sleep(delay)
+
+
 def load(path):
-    with open(path, encoding="utf-8") as f:
+    with _file_operation(open, path, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -61,7 +76,7 @@ def save(path, st):
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(st, f, ensure_ascii=False, indent=1)
-        os.replace(tmp, path)
+        _file_operation(os.replace, tmp, path)
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
