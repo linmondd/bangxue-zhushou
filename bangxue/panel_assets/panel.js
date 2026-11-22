@@ -95,6 +95,7 @@ function render(s) {
   el("guide").textContent = s.pausing ? "已请求暂停，当前操作结束后将关闭学习标签。" :
     (busyNames[s.busy] || (task ? task.note : next));
   el("python").textContent = s.setup.python || "检查中";
+  el("browser-name").textContent = s.setup.browser_name || "浏览器";
   for (const k of ["playwright", "chromium"]) el(k).textContent = k in s.setup ? (s.setup[k] ? "已就绪" : "待安装") : "检查中";
   el("repair").hidden = !s.setup.python || s.setup.chromium;
   el("login-hint").textContent = {opened:"请在学习窗口登录及验证，然后点击「检查登录」。",

@@ -677,7 +677,9 @@ def _entry(driver, cid, wid, owned):
                     raise TableReadError("无法确认播放标签来自本次学习入口")
                 owned.add(tab.id)
             _guard(driver)
-            if _on(driver, cid, wid, "play"):
+            # The selected page may have redirected after the tab list was read.
+            # Keep polling until the returned handle describes the playing page.
+            if _course(tab.url, wid, "play") == cid and driver.current_url() == tab.url:
                 return ("play", tab)
             if check_button and is_detail and _on(driver, cid, wid, "detail"):
                 raw = driver.eval(ENTER_JS)

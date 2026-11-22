@@ -26,8 +26,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         with ZipFile(DELIVERY / "Bangxue-Windows-x64.zip") as archive:
             archive.extractall(unpacked)
         executable = unpacked / "帮学助手/帮学助手.exe"
-        env.pop("PLAYWRIGHT_BROWSERS_PATH", None)
-        env["LOCALAPPDATA"] = str(root / "empty-cache")
+        env["PLAYWRIGHT_BROWSERS_PATH"] = str(root / "empty-cache")
     else:
         raise SystemExit("当前测试支持 macOS 和 Windows 桌面包")
     proc = subprocess.Popen([str(executable), "--test-panel", tmp], env=env)
@@ -59,7 +58,9 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             raise RuntimeError("打包版环境检查超时")
         if sys.platform == "win32":
             assert state["setup"].get("chromium") is True, state["error"]
-            print("Bundled Chromium launched without a browser cache")
+            assert state["setup"].get("browser_name") == "Google Chrome", state["setup"]
+            assert not (root / "empty-cache").exists()
+            print("Installed Google Chrome launched with an empty Playwright browser cache")
         print("Packaged panel served its UI and authenticated state")
     finally:
         proc.terminate()

@@ -8,7 +8,7 @@
 - [下载 macOS Apple 芯片版](https://github.com/linmondd/bangxue-zhushou/releases/latest/download/Bangxue-macOS-arm64.zip)
 - [查看发布记录](https://github.com/linmondd/bangxue-zhushou/releases)
 
-完整解压后双击「帮学助手」，浏览器会打开本地控制面板。Windows x64 桌面包内置 Chromium，macOS 版首次使用时按面板提示安装浏览器组件。然后填写自己的学习平台 HTTPS 地址，手动登录后勾选班级。默认同时播放 1 门，可选择 3、5 或 10 门。具体范围由用户确认。运行期间保持助手运行和电脑唤醒。平台要求验证或人工完成的课程会列入待处理。
+完整解压后双击「帮学助手」，浏览器会打开本地控制面板。Windows 版优先使用电脑上已安装的 Google Chrome。面板显示浏览器待安装时，按提示安装 Chromium。然后填写自己的学习平台 HTTPS 地址，手动登录后勾选班级。默认同时播放 1 门，可选择 3、5 或 10 门。具体范围由用户确认。运行期间保持助手运行和电脑唤醒。平台要求验证或人工完成的课程会列入待处理。
 
 ## 源码与 Agent
 

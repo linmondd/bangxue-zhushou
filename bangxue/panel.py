@@ -20,7 +20,7 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 from . import flow, runner, state, site_config
-from .drivers.playwright_driver import PlaywrightDriver
+from .drivers.playwright_driver import PlaywrightDriver, installed_windows_chrome
 
 
 def read(path, default):
@@ -37,16 +37,20 @@ class BrowserBackend:
 
     def browser(self):
         if self.driver is None:
-            self.driver = PlaywrightDriver(profile_dir=self.profile, headless=False)
+            self.driver = PlaywrightDriver(profile_dir=self.profile,
+                                           executable_path=installed_windows_chrome())
         return self.driver
 
     def setup(self):
         installed = importlib.util.find_spec("playwright") is not None
+        chrome = installed_windows_chrome()
         # A dependency probe creates a temporary Playwright runtime. Keep it
         # separate from the live sync runtime held by the browser worker.
         with ThreadPoolExecutor(max_workers=1) as pool:
-            chromium = installed and pool.submit(PlaywrightDriver(profile_dir=self.profile).available).result()
-        return {"python": sys.version.split()[0], "playwright": installed, "chromium": chromium}
+            probe = PlaywrightDriver(profile_dir=self.profile, executable_path=chrome)
+            chromium = installed and pool.submit(probe.available).result()
+        return {"python": sys.version.split()[0], "playwright": installed, "chromium": chromium,
+                "browser_name": "Google Chrome" if chrome else "Chromium 浏览器"}
 
     def repair(self):
         from .environment import install_browser
@@ -55,7 +59,8 @@ class BrowserBackend:
                 raise RuntimeError("安装包缺少 Playwright，请重新运行帮学助手安装程序。")
             subprocess.run([sys.executable, "-m", "pip", "install", "playwright>=1.40"],
                            check=True, timeout=600)
-        install_browser()
+        if installed_windows_chrome() is None:
+            install_browser()
 
     def close(self):
         if self.driver is not None:

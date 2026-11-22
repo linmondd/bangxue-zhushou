@@ -2,20 +2,48 @@
 1) connect_over_cdp：连接已开调试端口的 Chrome（需 --remote-debugging-port=9222）
 2) persistent：使用专用用户目录启动 Chromium（适合非技术用户，只需登录一次）
 """
-import os, subprocess, time, uuid
+import os, subprocess, sys, time, uuid
 from pathlib import Path
 from weakref import WeakKeyDictionary
 from .base import Driver, Tab
 
 
+def installed_windows_chrome():
+    if sys.platform != "win32":
+        return None
+    import winreg
+
+    key = r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe"
+    for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        for view in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
+            try:
+                with winreg.OpenKey(hive, key, 0, winreg.KEY_READ | view) as handle:
+                    value, _ = winreg.QueryValueEx(handle, None)
+            except OSError:
+                continue
+            if isinstance(value, str):
+                path = Path(os.path.expandvars(value.strip('"')))
+                if path.is_absolute() and path.name.lower() == "chrome.exe" and path.is_file():
+                    return path
+    for key in ("LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)"):
+        root = os.environ.get(key)
+        if root:
+            path = Path(root) / "Google" / "Chrome" / "Application" / "chrome.exe"
+            if path.is_file():
+                return path
+    return None
+
+
 class PlaywrightDriver(Driver):
     name = "playwright"
 
-    def __init__(self, cdp_url="http://127.0.0.1:9222", profile_dir=None, headless=False, zoom=100):
+    def __init__(self, cdp_url="http://127.0.0.1:9222", profile_dir=None, headless=False, zoom=100,
+                 executable_path=None):
         self.cdp_url = cdp_url
         self.profile_dir = profile_dir
         self.headless = headless
         self.zoom = zoom
+        self.executable_path = executable_path
         self._pw = None
         self._browser = None
         self._context = None
@@ -70,7 +98,8 @@ class PlaywrightDriver(Driver):
             return
         # Distinguish our startup blank from any pre-existing/restored blank tab.
         blank = "about:blank#bangxue-" + uuid.uuid4().hex
-        args = [self._pw.chromium.executable_path, f"--user-data-dir={profile}",
+        executable = self.executable_path or self._pw.chromium.executable_path
+        args = [str(executable), f"--user-data-dir={profile}",
                 "--remote-debugging-port=0", "--remote-debugging-address=127.0.0.1",
                 "--no-first-run", "--no-default-browser-check"]
         if self.headless:
@@ -95,6 +124,8 @@ class PlaywrightDriver(Driver):
         raise RuntimeError("无法连接专用 Chromium 配置，请核对该配置是否已被其他浏览器占用")
 
     def _chromium_installed(self):
+        if self.executable_path is not None:
+            return Path(self.executable_path).is_file()
         try:
             from playwright.sync_api import sync_playwright
             pw = sync_playwright().start()

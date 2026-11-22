@@ -6,8 +6,9 @@ import unittest
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
+from unittest.mock import patch
 
-from bangxue import panel, state
+from bangxue import environment, panel, state
 
 
 class LocalBackend:
@@ -85,6 +86,19 @@ class PanelTest(unittest.TestCase):
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.addCleanup(self.server.shutdown)
+
+    def test_installed_chrome_is_ready_without_downloading_chromium(self):
+        chrome = Path(self.tmp.name) / "chrome.exe"
+        chrome.touch()
+        backend = panel.BrowserBackend(Path(self.tmp.name) / "learning-profile")
+        with patch.object(panel, "installed_windows_chrome", return_value=chrome), \
+                patch.object(panel.importlib.util, "find_spec", return_value=True), \
+                patch.object(environment, "install_browser") as install:
+            self.assertTrue(backend.setup()["chromium"])
+            self.assertEqual("Google Chrome", backend.setup()["browser_name"])
+            self.assertEqual(chrome, backend.browser().executable_path)
+            backend.repair()
+            install.assert_not_called()
 
     def test_api_is_local_and_private(self):
         origin, token = self.server.url.split("/#")
