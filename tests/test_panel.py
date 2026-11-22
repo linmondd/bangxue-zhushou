@@ -9,7 +9,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from unittest.mock import patch
 
-from bangxue import cli, environment, panel, state
+from bangxue import cli, drivers, environment, panel, state
 
 
 class LocalBackend:
@@ -100,6 +100,9 @@ class PanelTest(unittest.TestCase):
             self.assertEqual(chrome, backend.browser().executable_path)
             backend.repair()
             install.assert_not_called()
+        with patch.object(drivers, "installed_windows_chrome", return_value=chrome):
+            explicit = drivers.get_driver("playwright", profile_dir=self.tmp.name)
+            self.assertEqual(chrome, explicit.executable_path)
 
     def test_api_is_local_and_private(self):
         origin, token = self.server.url.split("/#")

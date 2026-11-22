@@ -28,9 +28,11 @@ jobs:
         shell: powershell
         run: |
           $env:BANGXUE_HOME = Join-Path $env:RUNNER_TEMP 'fresh source install'
+          $env:PLAYWRIGHT_BROWSERS_PATH = Join-Path $env:RUNNER_TEMP 'empty source browser cache'
           .\install.ps1 -Mcp
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & (Join-Path $env:BANGXUE_HOME 'bin\bangxue.cmd') --help
+          if (Test-Path $env:PLAYWRIGHT_BROWSERS_PATH) { throw 'Unexpected Chromium download' }
+          & (Join-Path $env:BANGXUE_HOME 'bin\bangxue.cmd') agent --help
       - run: python packaging/build_desktop.py
       - run: python packaging/smoke_desktop.py
       - uses: actions/upload-artifact@v7

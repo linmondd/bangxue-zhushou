@@ -1,21 +1,20 @@
 """驱动注册与自动选择。"""
 from .base import Driver, Tab
 from .webbridge import WebBridgeDriver
-from .playwright_driver import PlaywrightDriver
+from .playwright_driver import PlaywrightDriver, installed_windows_chrome
 
 
 def get_driver(name=None, **kwargs):
     """name: webbridge | playwright | None(自动)。"""
-    if name in (None, "auto"):
+    if name not in (None, "auto", "webbridge", "playwright"):
+        raise ValueError(f"未知驱动: {name}")
+    if name != "playwright":
         wb = WebBridgeDriver(**{k: v for k, v in kwargs.items() if k in ("base", "session", "timeout", "zoom")})
-        if wb.available():
+        if name == "webbridge" or wb.available():
             return wb
-        pw = PlaywrightDriver(**{k: v for k, v in kwargs.items() if k in ("cdp_url", "profile_dir", "headless", "zoom")})
-        if pw.available():
-            return pw
-        return wb  # 都不可用时返回 webbridge（报错信息更明确）
-    if name == "webbridge":
-        return WebBridgeDriver(**{k: v for k, v in kwargs.items() if k in ("base", "session", "timeout", "zoom")})
-    if name == "playwright":
-        return PlaywrightDriver(**{k: v for k, v in kwargs.items() if k in ("cdp_url", "profile_dir", "headless", "zoom")})
-    raise ValueError(f"未知驱动: {name}")
+    profile = {k: v for k, v in kwargs.items() if k in ("cdp_url", "profile_dir", "headless", "zoom")}
+    if profile.get("profile_dir"):
+        profile["executable_path"] = installed_windows_chrome()
+    pw = PlaywrightDriver(**profile)
+    # Auto falls back to the bridge with its existing connection diagnostic.
+    return pw if name == "playwright" or pw.available() else wb

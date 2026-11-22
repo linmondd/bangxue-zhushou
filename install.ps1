@@ -17,8 +17,7 @@ $Extra = if ($Mcp) { 'playwright,mcp' } else { 'playwright' }
 $Minor = if ($Mcp) { 10 } else { 9 }
 Invoke-Checked $Python @("-c", "import sys; sys.exit(0 if sys.version_info >= (3,$Minor) else 'Python 3.$Minor+ required')")
 Invoke-Checked $Python @("-m","pip","install","$PSScriptRoot[$Extra]")
-Invoke-Checked $Python @("-m","playwright","install","chromium")
-Invoke-Checked $Python @("-c",'from bangxue import panel; from bangxue.drivers.playwright_driver import PlaywrightDriver; assert PlaywrightDriver(profile_dir=__name__).available()')
+Invoke-Checked $Python @("-c",'from bangxue.panel import BrowserBackend; backend = BrowserBackend(__name__); backend.repair(); assert backend.setup()[''chromium'']')
 $Commands = @("bangxue")
 if ($Mcp) { $Commands += "bangxue-mcp" }
 foreach ($cmd in $Commands) {
