@@ -1,6 +1,6 @@
 # 帮学助手
 
-帮学助手是一款本机学习任务管理工具。用户在自己的学习平台手动登录，在面板里选择课程范围并查看进度。账号、验证码和课程数据留在用户自己的电脑上，学习平台地址也仅保存在本机。
+帮学助手是一款本机学习任务管理工具。Agent 准备环境、查找班级并运行选定的学习任务，用户在面板查看进度和待处理事项。账号、验证码和课程数据留在用户自己的电脑上，学习平台地址也仅保存在本机。
 
 ## 下载与使用
 
@@ -8,9 +8,32 @@
 - [下载 macOS Apple 芯片版](https://github.com/linmondd/bangxue-zhushou/releases/latest/download/Bangxue-macOS-arm64.zip)
 - [查看发布记录](https://github.com/linmondd/bangxue-zhushou/releases)
 
-完整解压后双击「帮学助手」，浏览器会打开本地控制面板。Windows 版优先使用电脑上已安装的 Google Chrome。面板显示浏览器待安装时，按提示安装 Chromium。然后填写自己的学习平台 HTTPS 地址，手动登录后勾选班级。默认同时播放 1 门，可选择 3、5 或 10 门。具体范围由用户确认。运行期间保持助手运行和电脑唤醒。平台要求验证或人工完成的课程会列入待处理。
+完整解压后双击「帮学助手」，浏览器会打开学习工作台。将平台地址和希望学习的栏目或班级告诉同一台电脑上的 Agent。Windows 版优先使用已安装的 Google Chrome。平台需要首次登录、验证码或人工完成课程时，请按工作台提示处理。工作台可直接暂停任务，也可展开「手动设置」独立使用。运行期间保持助手运行和电脑唤醒。
 
-## 源码与 Agent
+## Agent 操作
+
+将这句话发给能在你电脑上运行程序的 Agent。
+
+> 请从 https://github.com/linmondd/bangxue-zhushou 安装并启动帮学助手。按我提供的平台和班级范围，用 Agent 命令准备环境、查找班级并运行任务。需要我登录或验证时提醒我，其余进度和结果放到学习工作台。
+
+可通过 `bangxue panel --background` 在后台启动，或者双击桌面版打开结果页。Agent 使用以下命令查询和操作同一任务。
+
+```sh
+bangxue agent prepare --url "https://learning.example.test"
+bangxue agent discover
+bangxue agent discover --tab "栏目名称"
+bangxue agent start --tab "栏目名称" --id "从列表取得的班级编号"
+bangxue agent status
+bangxue agent pause
+bangxue agent resume
+bangxue agent retry
+```
+
+用户明确授权整个栏目时，可用 `start --tab "栏目名称" --all`。若 `login` 为 `opened`，等待本人完成登录后重跑 `prepare`，再继续原指令。若返回 `busy`，用 `status` 跟进。任务运行由本机助手维持。
+
+桌面安装包内的可执行程序也接收同样的参数。调用 Windows 的 `帮学助手.exe` 时，在子命令前提供 `agent --output "本机结果.json" status`，即可从本机文件读取 JSON。使用 MCP 的客户端可调用 `bangxue_agent` 执行同一组操作。
+
+## 源码与独立命令
 
 Python 3.9+ 支持 CLI 与控制面板，MCP 需 Python 3.10+。macOS/Linux 运行 `bash install.sh`，Windows PowerShell 运行 `.\install.ps1`，随后执行 `bangxue panel`。MCP 安装选项为 `bash install.sh --mcp` 或 `.\install.ps1 -Mcp`。
 
@@ -32,9 +55,9 @@ bangxue resume --scope bangxue_scope.json --state-dir bangxue_classes
 
 页面操作依赖平台的具体结构。当前公开版本适合与现有实现兼容的课程页面，其他平台需要完成相应适配和验证。
 
-面板运行期间每分钟自动巡检，日志至少每十分钟写一次汇总。进程被系统终止后，重新打开应用会从已保存的暂停状态恢复，需点击继续。长时间运行时请保持电脑唤醒。
+面板运行期间每分钟自动巡检，日志至少每十分钟写一次汇总。退出后再次打开应用时，Agent 可以从已保存的任务继续。
 
-MCP 默认单轮调用，设置 `continuous=true` 持续巡检，参数 `interval_min` 默认为 1。将客户端 stdio command 设置为安装后的 `bangxue-mcp` 绝对路径。浏览器登录和任务范围仍由本人处理。`BANGXUE_SITE_URL` 可指定当前客户端的平台地址。
+旧版独立 MCP 工具默认单轮调用，设置 `continuous=true` 持续巡检，参数 `interval_min` 默认为 1。将客户端 stdio command 设置为安装后的 `bangxue-mcp` 绝对路径。`BANGXUE_SITE_URL` 可指定当前客户端的平台地址。
 
 ## 验证
 

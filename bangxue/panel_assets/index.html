@@ -6,10 +6,25 @@
   <script defer src="/panel.js"></script>
 </head>
 <body>
-<header><div class="wrap mast"><div class="brand"><i class="book" aria-hidden="true"></i>帮学助手</div><nav aria-label="主导航"><a href="#workspace">工作台</a><a href="#records">任务记录</a></nav></div></header>
+<header><div class="wrap mast"><div class="brand"><i class="book" aria-hidden="true"></i>帮学助手</div><nav aria-label="主导航"><a href="#workspace">工作台</a><a href="#records">学习结果</a></nav></div></header>
 <main class="wrap" id="workspace">
-  <section class="hero"><div><p class="kicker"><span class="light"></span> 本机学习面板</p><h1>学习工作台</h1><p id="guide">正在读取本机环境…</p></div><div class="count"><span>已完成班级</span><strong id="count">—</strong><progress id="meter" max="1" value="0" aria-label="已完成班级"></progress></div></section>
+  <section class="hero"><div><p class="kicker"><span class="light"></span> <span id="overview-status">正在连接</span></p><h1>学习工作台</h1><p id="guide">正在读取本机任务…</p></div><div class="count"><span>已完成班级</span><strong id="count">—</strong><progress id="meter" max="1" value="0" aria-label="已完成班级"></progress></div></section>
   <p id="notice" role="status" hidden></p>
+  <section class="card task" id="records"><div class="line between"><h2>任务与结果</h2><select id="history" aria-label="查看保存的任务" hidden></select></div>
+    <p id="empty" class="sub">把要学习的栏目或班级告诉 AI。任务开始后，这里会显示进度、核验结果和待处理事项。</p>
+    <div id="task" hidden><div class="task-head"><div><span id="phase" class="tag"></span><h3 id="task-title"></h3></div><div class="line" id="actions"></div></div>
+      <p id="task-note" class="sub" role="status"></p><p id="enroll" class="sub" hidden>开始后，助手将依次处理所选班级，并尝试报名尚未加入的班级。</p>
+      <dl class="summary" id="summary">
+        <div><dt>当前班级</dt><dd id="current-class">—</dd></div>
+        <div><dt>排队班级</dt><dd id="waiting-count">0</dd></div>
+        <div><dt>待处理班级</dt><dd id="attention-count">0</dd></div>
+      </dl>
+      <div id="results"></div><details id="logbox"><summary>运行记录</summary><pre id="logs"></pre></details>
+    </div>
+  </section>
+  <details class="settings">
+    <summary>手动设置</summary>
+    <p id="manual-task-controls" class="line"></p>
   <div class="grid">
     <section class="card setup"><h2>学习环境</h2>
       <div class="checks"><div><span>Python</span><b id="python">检查中</b></div><div><span>Playwright</span><b id="playwright">检查中</b></div><div><span id="browser-name">浏览器</span><b id="chromium">检查中</b></div></div>
@@ -26,13 +41,7 @@
       <div class="line between"><small id="selected"></small><button id="confirm" class="primary" data-act="confirm">确认学习范围</button></div></div>
     </section>
   </div>
-  <section class="card task" id="records"><div class="line between"><h2>任务与结果</h2><select id="history" aria-label="查看保存的任务" hidden></select></div>
-    <p id="empty" class="sub">确认范围后，这里会显示每个班级的进度和需要处理的课程。</p>
-    <div id="task" hidden><div class="task-head"><div><span id="phase" class="tag"></span><h3 id="task-title"></h3></div><div class="line" id="actions"></div></div>
-      <p id="task-note" class="sub" role="status"></p><p id="enroll" class="sub" hidden>开始后，助手将依次处理所选班级，并尝试报名尚未加入的班级。</p>
-      <div id="results"></div><details id="logbox"><summary>运行记录</summary><pre id="logs"></pre></details>
-    </div>
-  </section>
+  </details>
 </main>
 <footer class="wrap line between"><span>帮学助手 · 本地工作台</span><button class="quiet" data-act="quit">退出助手</button></footer>
 </body></html>

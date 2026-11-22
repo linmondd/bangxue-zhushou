@@ -12,7 +12,7 @@ const reasonNames = {user:"手动暂停", login:"需要重新登录", captcha:"�
   enroll_failed:"未能报名", no_table:"未读到课程表", capture_failed:"未能读取课程", manual:"需要人工学习",
   manual_required:"需要人工学习", unmapped:"未能识别部分课程", start_failed:"课程未能开始播放",
   removed:"课程已下架", table_unavailable:"暂时无法读取课程表"};
-const busyNames = {setup:"正在检查环境…",repair:"正在安装组件，下载可能需要几分钟…",login:"正在打开学习窗口…",
+const busyNames = {prepare:"正在准备学习环境并核对登录…",launch:"正在开始学习…",setup:"正在检查环境…",repair:"正在安装组件，下载可能需要几分钟…",login:"正在打开学习窗口…",
   verify:"正在检查登录…",tabs:"正在读取资源栏目…",classes:"正在读取班级…",start:"正在开始学习…",
   cycle:"正在核对课程进度…",pause:"正在暂停…",retry:"正在重试…",resume:"正在恢复…"};
 let state = null, submitting = false, localError = "", catalogKey = "", taskKey = "", historyKey = "", tabsKey = "";
@@ -58,12 +58,12 @@ function refreshButtons() {
 function renderResults(task) {
   const key = JSON.stringify([task.id,task.rows]);
   if (key === taskKey) return;
-  const open = new Set([...el("results").querySelectorAll("details[open]")].map(d => d.dataset.wid));
+  const open = new Map([...el("results").querySelectorAll("details")].map(d => [d.dataset.wid, d.open]));
   el("results").replaceChildren();
   for (const row of task.rows) {
     const group = node("details", undefined, "result");
     group.dataset.wid = row.wid;
-    group.open = open.has(row.wid);
+    group.open = open.get(row.wid) ?? (row.status === "attention");
     const head = node("summary");
     head.append(node("strong", row.title));
     const finished = row.courses.filter(x => x.label === "已完成").length;
@@ -90,10 +90,13 @@ function render(s) {
   el("count").textContent = done + " / " + total;
   el("meter").max = total || 1;
   el("meter").value = done;
-  const next = !s.setup.chromium ? "安装浏览器组件后，即可连接学习账号。" :
-    s.login !== "authenticated" ? "打开学习窗口登录，再选择本次学习范围。" : "读取资源栏目，选择本次学习的班级。";
-  el("guide").textContent = s.pausing ? "已请求暂停，当前操作结束后将关闭学习标签。" :
-    (busyNames[s.busy] || (task ? task.note : next));
+  const needsLogin = ["opened", "login"].includes(s.login);
+  const next = needsLogin ? "请在学习窗口完成登录或验证，AI 会复查登录状态。" :
+    task ? task.note : s.catalog.length ? "已查到 " + s.catalog.length + " 个班级，等待 AI 提交学习范围。" : "等待 AI 提交学习任务。";
+  el("overview-status").textContent = s.pausing ? "正在暂停" : s.busy ? "正在处理" :
+    needsLogin ? "等待登录" : task ? phaseNames[task.phase] : "等待任务";
+  el("guide").textContent = s.pausing ? "当前操作结束后将核对并关闭助手创建的学习标签。" :
+    (busyNames[s.busy] || next);
   el("python").textContent = s.setup.python || "检查中";
   el("browser-name").textContent = s.setup.browser_name || "浏览器";
   for (const k of ["playwright", "chromium"]) el(k).textContent = k in s.setup ? (s.setup[k] ? "已就绪" : "待安装") : "检查中";
@@ -134,13 +137,20 @@ function render(s) {
       (task.reason ? " · " + (reasonNames[task.reason] || task.reason) : "");
     el("enroll").hidden = task.phase !== "ready";
     const action = {ready:["start","开始学习"],running:["pause","暂停学习"],paused:["resume","继续学习"],attention:["retry","处理后重试"]}[task.phase];
-    const current = el("actions").firstChild;
-    if (current?.dataset.act !== action?.[0]) {
-      el("actions").replaceChildren();
+    const controls = action?.[0] === "pause" ? el("actions") : el("manual-task-controls");
+    const other = controls === el("actions") ? el("manual-task-controls") : el("actions");
+    if (other.childElementCount) other.replaceChildren();
+    if (controls.firstChild?.dataset.act !== action?.[0]) {
+      controls.replaceChildren();
       if (action) {
-        const b = node("button",action[1],"primary"); b.dataset.act = action[0]; el("actions").append(b);
+        const button = node("button", action[1], "primary");
+        button.dataset.act = action[0];
+        controls.append(button);
       }
     }
+    el("current-class").textContent = task.rows.find(row => row.status === "current")?.title || "—";
+    el("waiting-count").textContent = task.rows.filter(row => row.status === "waiting").length;
+    el("attention-count").textContent = task.rows.filter(row => row.status === "attention").length;
     renderResults(task);
     el("logs").textContent = task.logs.join("\n") || "尚无运行记录";
   }

@@ -34,6 +34,7 @@ class BrowserBackend:
     def __init__(self, profile_dir):
         self.profile = str(profile_dir)
         self.driver = None
+        self.login_tab = None
 
     def browser(self):
         if self.driver is None:
@@ -66,22 +67,30 @@ class BrowserBackend:
         if self.driver is not None:
             self.driver.shutdown()
             self.driver = None
+        self.login_tab = None
 
     def login(self):
         try:
-            self.browser().open(site_config.site_url("/portal/"), new_tab=True)
+            self.login_tab = self.browser().open(site_config.site_url("/portal/"), new_tab=True)
         except Exception:
             # A user may close the last window between visits. A healthy
             # browser with surviving pages must be left alone on a network error.
             if self.driver and self.driver.list_tabs():
                 raise
             self.close()
-            self.browser().open(site_config.site_url("/portal/"), new_tab=True)
+            self.login_tab = self.browser().open(site_config.site_url("/portal/"), new_tab=True)
 
     def verify(self):
         from .environment import check_session, login_status
-        current = login_status(self.browser())
-        return current if current == "authenticated" else check_session(self.browser())
+        browser = self.browser()
+        current = login_status(browser)
+        if current == "authenticated":
+            return current
+        login_window = self.login_tab and any(
+            tab.id == self.login_tab.id for tab in browser.list_tabs() or []
+        )
+        status = current if current == "login" and login_window else check_session(browser)
+        return "opened" if login_window and status != "authenticated" else status
 
     def tabs(self):
         return flow.read_library_tabs(self.browser())
@@ -105,7 +114,7 @@ class BrowserBackend:
             raise RuntimeError("未能恢复任务，请查看运行记录。")
 
 
-def class_rows(scope, directory):
+def class_rows(scope, directory, phase):
     progress = read(directory / "_scope_state.json", {})
     done = {wid for wid in progress.get("done", []) if state.has_evidence(progress.get("class_evidence", {}), wid)}
     skipped = progress.get("skipped", {})
@@ -114,9 +123,11 @@ def class_rows(scope, directory):
         wid = item["wid"]
         data = read(directory / (wid + ".json"), {})
         courses = data.get("courses", [])
-        completed = set(data.get("done", [])) if wid in done else set()
+        completed = set()
+        if data.get("workshop") == wid and data.get("verified_table_version") == 1:
+            completed = set(data.get("done", []))
         reason = skipped.get(wid) or data.get("attention_reason") or data.get("paused_reason", "")
-        status = ("done" if wid in done else "attention" if reason
+        status = ("done" if wid in done else "attention" if reason and reason != "user"
                   else "current" if wid == progress.get("current") else "waiting")
         details = []
         for course in courses:
@@ -130,7 +141,7 @@ def class_rows(scope, directory):
             elif not cid:
                 label = "未识别课程"
             elif cid in data.get("active", []):
-                label = "在播"
+                label = {"running": "在播", "paused": "待续播"}.get(phase, "播放状态待核实")
             else:
                 label = "待学习"
             playback = data.get("playback", {}).get(cid, {})
@@ -175,6 +186,7 @@ class Panel:
         self.tabs = []
         self.tab = ""
         self.catalog = []
+        self.catalog_site = ""
         try:
             self.index = read(self.root / "tasks.json", {"current": None, "history": []})
             self.task = self._load_task(self.index["current"]) if self.index["current"] else None
@@ -219,11 +231,11 @@ class Panel:
                       "history": self.index["history"], "task": None}
             if self.task:
                 scope_path, directory = self._paths()
-                rows, reason = class_rows(state.load(scope_path), directory)
+                rows, reason = class_rows(state.load(scope_path), directory, self.task["phase"])
                 result["task"] = {**self.task, "rows": rows, "reason": reason}
             return copy.deepcopy(result)
 
-    def _confirm(self, payload):
+    def _confirm(self, payload, *, launch=False):
         selected = payload.get("ids")
         if not isinstance(selected, list) or not selected or not all(isinstance(x, str) for x in selected):
             raise ActionError("请至少选择一个班级。")
@@ -239,15 +251,17 @@ class Panel:
         (folder / "progress").mkdir(parents=True)
         created = time.strftime("%Y-%m-%d %H:%M")
         state.save(folder / "scope.json", {"name": self.tab, "classes": classes, "created_at": created})
-        task = {"id": key, "site": site_config.configured(), "concurrency": concurrency, "name": self.tab, "created": created, "phase": "ready",
-                "note": "范围已保存，可核对班级后开始。", "logs": []}
+        task = {
+            "id": key, "site": site_config.configured(), "concurrency": concurrency,
+            "name": self.tab, "created": created, "phase": "running" if launch else "ready",
+            "note": "正在核对已选班级。" if launch else "范围已保存，可核对班级后开始。",
+            "logs": [],
+        }
         state.save(folder / "task.json", task)
         index = {"current": key, "history": [{"id": key, "name": self.tab, "created": created,
                                               "count": len(classes)}, *self.index["history"]]}
         state.save(self.root / "tasks.json", index)
         self.index, self.task = index, task
-        if self.task.get("site") != site_config.configured():
-            self.task["phase"], self.task["note"] = "attention", "请先切换到该任务使用的学习平台地址"
         self.catalog = []
 
     def submit(self, action, payload):
@@ -265,8 +279,12 @@ class Panel:
                     self.queue.append(("pause", {}))
                     self.cv.notify()
                 return
-            if self.busy or phase == "running" or phase == "attention" and action not in {"retry", "quit"}:
+            if self.busy or phase == "running":
                 raise ActionError("请等待当前操作完成，运行中的任务可先暂停。")
+            if action == "launch" and phase in {"ready", "paused", "attention"}:
+                raise ActionError("当前任务尚未结束，请继续或处理该任务。")
+            if phase == "attention" and action not in {"retry", "quit", "prepare", "site", "login", "verify"}:
+                raise ActionError("当前任务需要处理，可检查登录后重试。")
             if action == "quit":
                 self.closing = True
                 self.cv.notify_all()
@@ -282,13 +300,24 @@ class Panel:
                 if self.task.get("site") and self.task["site"] != site_config.configured():
                     raise ActionError("当前平台与此任务的学习平台不同")
                 self._phase("running", "正在核对已选班级。")
-            elif action == "site":
-                if self.task and self.task["phase"] in {"running", "ready", "paused", "attention"}:
-                    raise ActionError("请先完成当前任务后再更换站点")
-                site_config.save(payload.get("url"))
-                self.login, self.catalog, self.tabs, self.tab = "unknown", [], [], ""
-                self.error = ""
-                return
+            elif action in {"site", "prepare"}:
+                if action == "site" or "url" in payload:
+                    address = site_config.origin(payload.get("url"))
+                    if address != site_config.configured():
+                        if phase in {"ready", "paused", "attention"} and self.task.get("site") != address:
+                            raise ActionError("请继续当前任务所用的平台。")
+                        site_config.save(address)
+                        self.login, self.catalog, self.tabs, self.tab = "unknown", [], [], ""
+                if action == "site":
+                    self.error = ""
+                    return
+            elif action == "launch":
+                if not self.setup.get("chromium") or self.login != "authenticated":
+                    raise ActionError("学习环境尚未就绪，请先准备。")
+                address = site_config.configured()
+                if not address or payload.get("site") != address or self.catalog_site != address:
+                    raise ActionError("学习平台已更新，请重新读取班级列表。")
+                self._confirm(payload, launch=True)
             elif action == "confirm":
                 self._confirm(payload)
                 self.error = ""
@@ -345,7 +374,26 @@ class Panel:
                 self.deadline = max(time.monotonic() + 1, tick + self.interval)
 
     def _execute(self, action, payload):
-        if action in {"setup", "repair"}:
+        if action == "prepare":
+            if not site_config.configured():
+                with self.cv:
+                    self.error = "请提供学习平台地址。"
+                return
+            setup = self.backend.setup()
+            if not setup.get("chromium"):
+                self.backend.repair()
+                setup = self.backend.setup()
+            with self.cv:
+                self.setup = setup
+            if not setup.get("chromium"):
+                raise RuntimeError("浏览器组件尚未就绪。")
+            status = self.backend.verify()
+            if status not in {"authenticated", "opened"}:
+                self.backend.login()
+                status = "opened"
+            with self.cv:
+                self.login = status
+        elif action in {"setup", "repair"}:
             if action == "repair":
                 self.backend.close()
                 self.backend.repair()
@@ -361,7 +409,7 @@ class Panel:
             with self.cv:
                 self.login = status
                 if status != "authenticated":
-                    self.error = "尚未在学习窗口确认登录。请完成登录及验证，再点击检查。"
+                    self.error = "请在学习窗口完成登录及验证。"
         elif action == "tabs":
             tabs = self.backend.tabs()
             with self.cv:
@@ -370,6 +418,7 @@ class Panel:
                     self.error = "未读到资源栏目。请检查学习窗口的登录状态，或填写网站上显示的栏目全名。"
         elif action == "classes":
             tab = payload["tab"].strip()
+            address = site_config.configured()
             classes = self.backend.classes(tab)
             unique = {}
             for item in classes:
@@ -378,7 +427,7 @@ class Panel:
                     raise ValueError("班级标识无法识别，请重新读取栏目。")
                 unique[wid] = {"wid": wid, "title": str(item.get("title") or wid)}
             with self.cv:
-                self.tab, self.catalog = tab, list(unique.values())
+                self.tab, self.catalog, self.catalog_site = tab, list(unique.values()), address
                 if not self.catalog:
                     self.error = "此栏目未读到班级。请核对栏目名称和登录状态，再次读取。"
         elif action == "pause":
@@ -414,7 +463,7 @@ class Panel:
                 except Exception as exc:
                     with self.cv:
                         self.error = (str(exc).split("Call log:")[0].strip() or type(exc).__name__)[:500]
-                        if action in {"cycle", "start", "pause", "resume", "retry"}:
+                        if action in {"cycle", "start", "launch", "pause", "resume", "retry"}:
                             self._phase("attention", self.error)
                 finally:
                     with self.cv:
@@ -527,6 +576,10 @@ def _existing_url(root):
     raise RuntimeError("已有面板正在启动或退出，请稍后重新打开。")
 
 
+def panel_root():
+    return Path(os.environ.get("BANGXUE_PANEL_ROOT", Path.home() / ".bangxue" / "panel"))
+
+
 def main(profile_dir=None, *, open_browser=True, ready=None, root=None):
     def show(url):
         if ready:
@@ -536,7 +589,7 @@ def main(profile_dir=None, *, open_browser=True, ready=None, root=None):
         if open_browser:
             webbrowser.open(url)
 
-    root = Path(root) if root is not None else Path.home() / ".bangxue" / "panel"
+    root = Path(root) if root is not None else panel_root()
     try:
         panel = Panel(root, profile_dir=profile_dir)
     except PanelAlreadyRunning:

@@ -98,7 +98,7 @@ class EntryPoints(unittest.TestCase):
             async with stdio_client(params) as (reader, writer), ClientSession(reader,writer) as sess:
                 await sess.initialize()
                 names = {tool.name for tool in (await sess.list_tools()).tools}
-                self.assertTrue({"bangxue_run","bangxue_stop","bangxue_resume"} <= names)
+                self.assertTrue({"bangxue_agent","bangxue_run","bangxue_stop","bangxue_resume"} <= names)
                 result = await sess.call_tool("bangxue_status", {"state":str(path)})
                 self.assertFalse(result.isError)
                 self.assertIn("已确认 1 门", result.content[0].text)

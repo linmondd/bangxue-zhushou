@@ -124,7 +124,7 @@ def cmd_resume(args):
 
 def cmd_panel(args):
     from . import panel
-    panel.main(profile_dir=args.profile)
+    panel.main(profile_dir=args.profile, open_browser=not args.background)
 
 
 def cmd_scope(args):
@@ -255,7 +255,11 @@ def build_parser():
                    help="Playwright 持久化登录目录（默认 ~/.bangxue/profile）")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("panel", help="打开本机图形控制面板").set_defaults(fn=cmd_panel)
+    from . import panel_client
+    panel_cli = sub.add_parser("panel", help="打开本机图形控制面板")
+    panel_cli.add_argument("--background", action="store_true", help="在后台运行，不自动打开面板标签")
+    panel_cli.set_defaults(fn=cmd_panel)
+    panel_client.add_parser(sub)
 
     config = sub.add_parser("site", help="设置本机学习平台地址")
     config.add_argument("--url", required=True)

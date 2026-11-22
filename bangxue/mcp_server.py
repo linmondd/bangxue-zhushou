@@ -69,6 +69,15 @@ def _watch(key, fn, args, interval_min):
 
 
 @mcp.tool()
+def bangxue_agent(operation: str, url: str = "", tab: str = "", ids: list[str] | None = None,
+                  all_classes: bool = False, concurrency: int = 1) -> dict:
+    """操作正在运行的本机面板。prepare 准备环境，discover 查栏目或班级，start 按已授权的编号或全栏目启动，status/pause/resume/retry 管理当前任务。"""
+    from .panel_client import run
+    return run(operation, url=url or None, tab=tab or None, ids=ids,
+               all_classes=all_classes, concurrency=concurrency)
+
+
+@mcp.tool()
 def bangxue_capture(workshop: str, state: str = DEFAULT_STATE, concurrency: int = 5) -> str:
     """读取专题班完整课表。"""
     import re

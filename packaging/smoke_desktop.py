@@ -18,6 +18,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
     unpacked = root / "中文 解压目录"
     unpacked.mkdir()
     env = os.environ.copy()
+    env["BANGXUE_PANEL_ROOT"] = str(root / "state")
     if sys.platform == "darwin":
         archive = DELIVERY / f"Bangxue-macOS-{platform.machine()}.zip"
         subprocess.run(["ditto", "-x", "-k", str(archive), str(unpacked)], check=True)
@@ -61,7 +62,12 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             assert state["setup"].get("browser_name") == "Google Chrome", state["setup"]
             assert not (root / "empty-cache").exists()
             print("Installed Google Chrome launched with an empty Playwright browser cache")
-        print("Packaged panel served its UI and authenticated state")
+        result_path = root / "任务结果.json"
+        subprocess.run([str(executable), "agent", "--output", str(result_path), "status"],
+                       env=env, check=True, timeout=30)
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+        assert result["setup"] == state["setup"], result
+        print("Packaged Agent command read the same state as the panel")
     finally:
         proc.terminate()
         proc.wait(timeout=30)

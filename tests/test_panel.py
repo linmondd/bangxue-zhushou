@@ -1,5 +1,6 @@
 """Exercise the actual panel with synthetic courses and an isolated local state directory."""
 import json
+import os
 import tempfile
 import threading
 import unittest
@@ -8,7 +9,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from unittest.mock import patch
 
-from bangxue import environment, panel, state
+from bangxue import cli, environment, panel, state
 
 
 class LocalBackend:
@@ -129,6 +130,52 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(info["task"]["phase"], "paused")
         self.assertEqual(info["task"]["rows"][0]["wid"], "sample")
 
+    def test_agent_uses_panel_worker_and_starts_only_the_given_scope(self):
+        from bangxue import panel_client
+
+        root = Path(self.tmp.name)
+        state.save(root / "window.json", {"url": self.server.url})
+        context = patch.dict(os.environ, {"BANGXUE_PANEL_ROOT": str(root)})
+        context.start()
+        self.addCleanup(context.stop)
+        result = root / "结果.json"
+        cli.main(["agent", "--output", str(result), "prepare"])
+        self.assertEqual("authenticated", state.load(result)["login"])
+        client = panel_client.Client()
+        self.assertIn("repair", self.backend.calls)
+        self.assertNotIn("login", self.backend.calls)
+        self.assertIn("员工培训", client.discover()["tabs"])
+        self.assertEqual(["omit", "sample"], [row["wid"] for row in client.discover("员工培训")["catalog"]])
+        with self.assertRaisesRegex(ValueError, "列表"):
+            client.action("launch", site=client.status()["site"], tab="其他栏目", ids=["sample"], concurrency=3)
+        self.assertIsNone(client.status()["task"])
+        cli.main(["agent", "--output", str(result), "start", "--tab", "员工培训", "--id", "sample", "--concurrency", "3"])
+        self.assertEqual("running", state.load(result)["task"]["phase"])
+        running = client.wait()["task"]
+        self.assertEqual("running", running["phase"])
+        self.assertEqual(["sample"], [row["wid"] for row in running["rows"]])
+        client.action("pause", id=running["id"])
+        self.assertEqual("paused", client.wait()["task"]["phase"])
+        client.action("resume", id=running["id"])
+        self.assertEqual("attention", client.wait()["task"]["phase"])
+        self.assertEqual("authenticated", client.prepare()["login"])
+        with self.assertRaisesRegex(ValueError, "当前任务"):
+            client.action("launch", tab="员工培训", ids=["sample"], concurrency=3)
+        client.action("retry", id=running["id"])
+        self.assertEqual("complete", client.wait()["task"]["phase"])
+        self.assertEqual(1, len(client.status()["history"]))
+
+    def test_agent_waits_for_sign_in_without_selecting_a_scope(self):
+        from bangxue import panel_client
+
+        client = panel_client.Client(self.server.url)
+        with patch.object(self.backend, "verify", side_effect=["login", "opened", "authenticated"]):
+            self.assertEqual("opened", client.prepare()["login"])
+            self.assertEqual("opened", client.prepare()["login"])
+            self.assertEqual("authenticated", client.prepare()["login"])
+        self.assertEqual(1, self.backend.calls.count("login"))
+        self.assertIsNone(client.status()["task"])
+
     def test_real_chromium_panel(self):
         try:
             from playwright.sync_api import expect, sync_playwright
@@ -151,6 +198,9 @@ class PanelTest(unittest.TestCase):
                 page.route("**/*", local_only)
                 page.goto(self.server.url)
                 expect(page.get_by_role("heading",name="学习工作台")).to_be_visible()
+                expect(page.get_by_role("heading", name="任务与结果")).to_be_in_viewport()
+                expect(page.get_by_role("button", name="安装 / 修复组件")).not_to_be_visible()
+                page.get_by_text("手动设置", exact=True).click()
                 page.get_by_role("button",name="安装 / 修复组件").click()
                 page.get_by_role("button",name="打开登录窗口").click()
                 page.get_by_role("button",name="检查登录").click()
@@ -166,9 +216,15 @@ class PanelTest(unittest.TestCase):
                 page.get_by_role("button",name="暂停学习").click()
                 expect(page.locator("#phase")).to_have_text("已暂停")
                 page.reload()
-                page.get_by_role("button",name="继续学习").click()
+                expect(page.locator("#phase")).to_have_text("已暂停")
+                page.get_by_text("手动设置", exact=True).click()
+                expect(page.get_by_role("button", name="继续学习")).to_be_enabled()
+                from bangxue.panel_client import Client
+                Client(self.server.url).action("resume", id=self.app.snapshot()["task"]["id"])
                 expect(page.locator("#phase")).to_have_text("待处理")
-                page.locator("#results summary").click()
+                pending = page.locator("#results details")
+                if pending.get_attribute("open") is None:
+                    pending.locator("summary").click()
                 expect(page.get_by_text("需要人工完成练习")).to_be_visible()
                 page.get_by_role("button",name="处理后重试").click()
                 expect(page.locator("#phase")).to_have_text("已完成")
