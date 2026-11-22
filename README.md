@@ -14,7 +14,7 @@
 
 将这句话发给能在你电脑上运行程序的 Agent。
 
-> 请从 https://github.com/linmondd/bangxue-zhushou 安装并启动帮学助手。按我提供的平台和班级范围，用 Agent 命令准备环境、查找班级并运行任务。需要我登录或验证时提醒我，其余进度和结果放到学习工作台。
+> 请先安装并启动 [帮学助手](https://github.com/linmondd/bangxue-zhushou/releases/latest)，按我给的平台和班级范围执行，把进度和结果显示在工作台。如果安装包、浏览器组件或 Agent 接口用不了，请自动切换到 [备用浏览器流程](https://github.com/linmondd/bangxue-zhushou/blob/main/docs/agent-browser-fallback.md)，用你已有的浏览器或电脑操作工具继续同一范围，在对话里汇报结果。两种方式都以平台课表核验是否完成，保留我手动打开的页面，需要我本人登录或验证时再提醒我。
 
 可通过 `bangxue panel --background` 在后台启动，或者双击桌面版打开结果页。Agent 使用以下命令查询和操作同一任务。
 
@@ -35,9 +35,7 @@ bangxue agent retry
 
 ## 组件不可用时的备用流程
 
-桌面版、浏览器组件或 MCP 用不了时，有本机浏览器或电脑操作能力的 Agent 可以在你授权的浏览器里直接执行。把下面这句话发给它。
-
-> 请读取 <https://github.com/linmondd/bangxue-zhushou/blob/main/docs/agent-browser-fallback.md>，用你已有的浏览器或电脑操作工具，按我给定的栏目或班级范围继续。用平台课表核验完成结果，在对话里汇报进度和待处理事项，需要本人登录或验证时再告诉我。
+桌面版、浏览器组件或 MCP 用不了时，有本机浏览器或电脑操作能力的 Agent 可以在你授权的浏览器里直接执行。
 
 支持 Skill 的 Agent 可载入仓库根目录的 `SKILL.md`。其他 Agent 可直接读取流程。 [Agent 浏览器流程](docs/agent-browser-fallback.md) · [SKILL.md](SKILL.md)
 
